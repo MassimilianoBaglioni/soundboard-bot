@@ -3,6 +3,7 @@ use serenity::all::ChannelId;
 use serenity::all::CreateInteractionResponse;
 use serenity::all::CreateMessage;
 use serenity::all::GuildId;
+use serenity::all::ButtonStyle;
 use serenity::async_trait;
 use serenity::builder::CreateButton;
 use serenity::builder::GetMessages;
@@ -17,11 +18,8 @@ use std::time::{Duration, Instant};
 use tokio::time;
 
 /*TODO
- * 2) Fix random blocking (navie solution is calling the delete and recreate buttons
- *    after a certain number of failed interactions).
  * 3) Add button to make it quit.
  * */
-
 const SOUNDBOARD: [(&str, &str, &str); 21] = [
     ("1", "🏴DVCE", "duce.mp3"),
     ("2", "🍊Swiggity Swag", "file.mp3"),
@@ -54,7 +52,7 @@ struct Handler {
 
 #[async_trait]
 impl EventHandler for Handler {
-    async fn message(&self , ctx: Context, msg: Message) {
+    async fn message(&self, ctx: Context, msg: Message) {
         if msg.content == "!soundboard" {
             if let Some(channel_id) = self.get_channel_id(&ctx, &msg).await {
                 self.delete_messages(&ctx, &msg.channel_id).await;
@@ -98,9 +96,12 @@ impl Handler {
     ) -> serenity::model::channel::Message {
         let mut msg = CreateMessage::new().content("Soundboard\n");
 
+        // Skipping last item that will always be the stop button that will have a cutsom style.
         for (id, button_label, _) in &SOUNDBOARD {
             msg = msg.button(CreateButton::new(*id).label(*button_label));
         }
+        
+        msg = msg.button(CreateButton::new("stop").label("STOP").style(ButtonStyle::Danger));
 
         channel_id.send_message(ctx, msg).await.unwrap()
     }
@@ -118,20 +119,21 @@ impl Handler {
 
         let mut interaction_stream = msg.await_component_interaction(&ctx.shard).stream();
 
-
         while let Some(interaction) = interaction_stream.next().await {
             if let Some((_, _, found_path)) = SOUNDBOARD
                 .iter()
                 .find(|&&(item_id, _, _)| item_id == interaction.data.custom_id.as_str())
             {
-                self.join_channel(&ctx, &voice_channel_id, &guild_id).await;
-                let path = PathBuf::from(AUDIO_PATH.to_owned() + found_path);
-                self.play_from_source(&ctx, &guild_id, path).await;
+                    self.join_channel(&ctx, &voice_channel_id, &guild_id).await;
+                    let path = PathBuf::from(AUDIO_PATH.to_owned() + found_path);
+                    self.play_from_source(&ctx, &guild_id, path).await;
 
-                let mut last_interaction = self.last_interaction.lock().unwrap();
-                *last_interaction = Instant::now();
-                println!("{:?}", *self.last_interaction);
+                    let mut last_interaction = self.last_interaction.lock().unwrap();
+                    *last_interaction = Instant::now();
+            } else if interaction.data.custom_id == "stop" {
+                self.stop_reproduction(&ctx, &guild_id).await;
             }
+
             interaction
                 .create_response(&ctx, CreateInteractionResponse::Acknowledge)
                 .await
@@ -154,6 +156,19 @@ impl Handler {
             let _ = handler.play_input(source.into());
         } else {
             println!("No handler dayum");
+        }
+    }
+
+    async fn stop_reproduction(&self, ctx: &Context, guild_id: &GuildId) {
+        let manager = songbird::get(ctx)
+            .await
+            .expect("Songbird Voice client placed in at initialisation")
+            .clone();
+
+        if let Some(handler_lock) = manager.get(*guild_id) {
+            let mut handler = handler_lock.lock().await;
+
+            handler.stop();
         }
     }
 
@@ -197,15 +212,15 @@ impl Handler {
 
     async fn start_inactivity_checker(&self, ctx: &Context, guild_id: &GuildId) {
         let last_interaction = Arc::clone(&self.last_interaction);
-        println!("Starting the thread");
+        
         let manager = songbird::get(ctx)
-                .await
-                .expect("Songbird Voice client placed in at initialisation")
-                .clone();
+            .await
+            .expect("Songbird Voice client placed in at initialisation")
+            .clone();
         let c_guild_id = guild_id.clone();
 
         tokio::spawn(async move {
-            let timeout_duration = Duration::from_secs(15*60);
+            let timeout_duration = Duration::from_secs(15 * 60);
             let mut interval = time::interval(Duration::from_secs(60));
 
             loop {
