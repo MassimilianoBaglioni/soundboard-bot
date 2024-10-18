@@ -20,8 +20,7 @@ use tokio::time;
  * 2) Fix random blocking (navie solution is calling the delete and recreate buttons
  *    after a certain number of failed interactions).
  * 3) Add button to make it quit.
- * 4) Join a channel when a valid button is clicked and the bot is not in the channel.
-*/
+ * */
 
 const SOUNDBOARD: [(&str, &str, &str); 21] = [
     ("1", "🏴DVCE", "duce.mp3"),
@@ -125,6 +124,7 @@ impl Handler {
                 .iter()
                 .find(|&&(item_id, _, _)| item_id == interaction.data.custom_id.as_str())
             {
+                self.join_channel(&ctx, &voice_channel_id, &guild_id).await;
                 let path = PathBuf::from(AUDIO_PATH.to_owned() + found_path);
                 self.play_from_source(&ctx, &guild_id, path).await;
 
@@ -138,7 +138,7 @@ impl Handler {
                 .unwrap();
         }
 
-        self.delete_messages(&ctx, voice_channel_id);
+        self.delete_messages(&ctx, voice_channel_id).await;
     }
 
     async fn play_from_source(&self, ctx: &Context, guild_id: &GuildId, path: PathBuf) {
