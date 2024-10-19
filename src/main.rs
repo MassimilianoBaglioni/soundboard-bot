@@ -96,12 +96,12 @@ impl Handler {
     ) -> serenity::model::channel::Message {
         let mut msg = CreateMessage::new().content("Soundboard\n");
 
-        // Skipping last item that will always be the stop button that will have a cutsom style.
         for (id, button_label, _) in &SOUNDBOARD {
             msg = msg.button(CreateButton::new(*id).label(*button_label));
         }
         
         msg = msg.button(CreateButton::new("stop").label("STOP").style(ButtonStyle::Danger));
+        msg = msg.button(CreateButton::new("quit").label("QUIT").style(ButtonStyle::Danger));
 
         channel_id.send_message(ctx, msg).await.unwrap()
     }
@@ -132,6 +132,12 @@ impl Handler {
                     *last_interaction = Instant::now();
             } else if interaction.data.custom_id == "stop" {
                 self.stop_reproduction(&ctx, &guild_id).await;
+            } else if interaction.data.custom_id == "quit" {
+                let manager = songbird::get(ctx)
+                    .await
+                    .expect("Songbird Voice client placed in at initialisation")
+                    .clone();
+                let _ = manager.leave(guild_id).await;
             }
 
             interaction
