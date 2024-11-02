@@ -17,9 +17,6 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::time;
 
-/*TODO
- * 3) Add button to make it quit.
- * */
 const SOUNDBOARD: [(&str, &str, &str); 21] = [
     ("1", "🏴DVCE", "duce.mp3"),
     ("2", "🍊Swiggity Swag", "file.mp3"),
