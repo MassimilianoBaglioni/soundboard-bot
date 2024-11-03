@@ -20,30 +20,6 @@ use std::fs;
 use std::path::Path;
 use tokio::time;
 
-const SOUNDBOARD: [(&str, &str, &str); 21] = [
-    ("1", "🏴DVCE", "duce.mp3"),
-    ("2", "🍊Swiggity Swag", "file.mp3"),
-    ("3", "💩Negro", "negro.mp3"),
-    ("4", "😵Stacci Dentro", "stacci_dentro.mp3"),
-    ("5", "💀Im gon shoot you", "young_metro.mp3"),
-    ("6", " Sette", "sette.mp3"),
-    ("7", "3 piotte", "scarpe.mp3"),
-    ("8", "Muzuu oh", "mado.mp3"),
-    ("9", "Frah guarda che...", "visto_che.mp3"),
-    ("10", "Lolicon janai", "feministo.mp3"),
-    ("11", "Schiaffi", "schiaffi.mp3"),
-    ("12", "Regolare", "regolare.mp3"),
-    ("13", "Pieffo", "pieffo.mp3"),
-    ("14", "Futuro", "futuro.mp3"),
-    ("15", "Presente", "presente.mp3"),
-    ("16", "ullachi", "ullachi.mp3"),
-    ("17", "smesh", "smesh.mp3"),
-    ("18", "cervello fruh", "cervello.mp3"),
-    ("19", "Negroooo", "negro_tiz.mp3"),
-    ("20", "It's quandale dingle here", "dingle.mp3"),
-    ("21", "Ti odio", "odio.mp3"),
-];
-
 const AUDIO_PATH: &str = "./audio/";
 
 fn get_soundboard_data(location: &str) -> 
