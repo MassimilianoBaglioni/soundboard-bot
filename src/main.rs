@@ -1,4 +1,5 @@
 use futures::future::join_all;
+use futures::stream::{self};
 use serenity::all::ChannelId;
 use serenity::all::CreateInteractionResponse;
 use serenity::all::CreateMessage;
@@ -24,7 +25,7 @@ const AUDIO_PATH: &str = "./audio/";
 
 fn get_soundboard_data(location: &str) -> 
 Result<Vec<(String, String, String)>, io::Error>{ 
-    let path = Path::new(location); 
+    let path = Path::new(location);
     let mut result = Vec::<(String, String, String)>::new();
 
     if path.is_dir() {
@@ -49,7 +50,6 @@ Result<Vec<(String, String, String)>, io::Error>{
 
         }
     }
-
     Ok(result)
 }
 
@@ -101,20 +101,35 @@ impl Handler {
         &self,
         ctx: &Context,
         channel_id: &ChannelId,
-    ) -> serenity::model::channel::Message {
+    ) -> Vec<serenity::model::channel::Message> {
+
+        let mut messages_vec = 
+            Vec::<serenity::model::channel::Message>::new();
+
         let mut msg = CreateMessage::new().content("Soundboard\n");
 
         for (id, button_label, _) in self.soundboard_data
         .iter()
         .map(|tuple| (tuple.0.as_str(), tuple.1.as_str(), tuple.2.as_str()))
         {
+            let parsed_int = id.parse::<usize>().expect("error parsiung index");
+            if parsed_int % 25 == 0 && parsed_int > 1 {
+                println!("Entered=");
+                messages_vec.push(channel_id.send_message(ctx, msg).await.unwrap());
+                msg = CreateMessage::new();
+            }
+
             msg = msg.button(CreateButton::new(id).label(button_label));
         }
         
+        messages_vec.push(channel_id.send_message(ctx, msg).await.unwrap());
+        msg = CreateMessage::new();
+
         msg = msg.button(CreateButton::new("stop").label("STOP").style(ButtonStyle::Danger));
         msg = msg.button(CreateButton::new("quit").label("QUIT").style(ButtonStyle::Danger));
 
-        channel_id.send_message(ctx, msg).await.unwrap()
+        messages_vec.push(channel_id.send_message(ctx, msg).await.unwrap());
+            messages_vec
     }
 
     async fn soundboard_handler(
@@ -126,11 +141,14 @@ impl Handler {
     ) {
         self.join_channel(&ctx, voice_channel_id, &guild_id).await;
 
-        let msg = self.send_soundboard_msg(ctx, msg_channel_id).await;
+        let streams_vec: Vec<_> = self.send_soundboard_msg(ctx, msg_channel_id).await
+            .iter()
+            .map(|message| message.await_component_interaction(&ctx.shard).stream())
+            .collect();
 
-        let mut interaction_stream = msg.await_component_interaction(&ctx.shard).stream();
+        let mut combined_stream = stream::select_all(streams_vec); 
 
-        while let Some(interaction) = interaction_stream.next().await {
+        while let Some(interaction) = combined_stream.next().await {
             if let Some((_, _, found_path)) = self.soundboard_data
                 .iter()
                 .find(|&(item_id, _, _)| item_id == interaction.data.custom_id.as_str())
