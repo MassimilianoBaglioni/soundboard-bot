@@ -15,6 +15,9 @@ use songbird::SerenityInit;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+use std::io;
+use std::fs;
+use std::path::Path;
 use tokio::time;
 
 const SOUNDBOARD: [(&str, &str, &str); 21] = [
@@ -43,8 +46,40 @@ const SOUNDBOARD: [(&str, &str, &str); 21] = [
 
 const AUDIO_PATH: &str = "./audio/";
 
+fn get_soundboard_data(location: &str) -> 
+Result<Vec<(String, String, String)>, io::Error>{ 
+    let path = Path::new(location); 
+    let mut result = Vec::<(String, String, String)>::new();
+
+    if path.is_dir() {
+        for (index, file) in fs::read_dir(path)?.enumerate(){
+            
+            let path = file?.path();
+
+            if path.is_file() {
+                if let Some(file_name) = path.file_name().and_then(
+                    |name| name.to_str()){
+
+                    if let Some(tmp_path) = Path::new(file_name)
+                        .file_stem()
+                        .and_then(|stem| stem.to_str()) {
+                            result.push((index.to_string(), 
+                                    tmp_path.to_string(),
+                                    file_name.to_string()));
+                        };
+                    
+                }
+            }
+
+        }
+    }
+
+    Ok(result)
+}
+
 struct Handler {
     last_interaction: Arc<Mutex<Instant>>,
+    soundboard_data: Vec<(String, String, String)>,
 }
 
 #[async_trait]
@@ -93,8 +128,11 @@ impl Handler {
     ) -> serenity::model::channel::Message {
         let mut msg = CreateMessage::new().content("Soundboard\n");
 
-        for (id, button_label, _) in &SOUNDBOARD {
-            msg = msg.button(CreateButton::new(*id).label(*button_label));
+        for (id, button_label, _) in self.soundboard_data
+        .iter()
+        .map(|tuple| (tuple.0.as_str(), tuple.1.as_str(), tuple.2.as_str()))
+        {
+            msg = msg.button(CreateButton::new(id).label(button_label));
         }
         
         msg = msg.button(CreateButton::new("stop").label("STOP").style(ButtonStyle::Danger));
@@ -117,9 +155,9 @@ impl Handler {
         let mut interaction_stream = msg.await_component_interaction(&ctx.shard).stream();
 
         while let Some(interaction) = interaction_stream.next().await {
-            if let Some((_, _, found_path)) = SOUNDBOARD
+            if let Some((_, _, found_path)) = self.soundboard_data
                 .iter()
-                .find(|&&(item_id, _, _)| item_id == interaction.data.custom_id.as_str())
+                .find(|&(item_id, _, _)| item_id == interaction.data.custom_id.as_str())
             {
                     self.join_channel(&ctx, &voice_channel_id, &guild_id).await;
                     let path = PathBuf::from(AUDIO_PATH.to_owned() + found_path);
@@ -251,6 +289,8 @@ async fn main() {
     let mut client = Client::builder(&token, intents)
         .event_handler(Handler {
             last_interaction: Arc::new(Mutex::new(Instant::now())),
+            soundboard_data: get_soundboard_data(AUDIO_PATH)
+                .expect("Failed to load soundboard data"),
         })
         .register_songbird()
         .await
