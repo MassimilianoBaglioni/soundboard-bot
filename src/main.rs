@@ -97,6 +97,10 @@ impl Handler {
         None
     }
 
+    // Returns a list of messages. 
+    // We are not sending a single big message since Discord
+    // does not allow to send messages with more than 25 buttons. 
+    // Here we send a list of messages with 25 buttons each. 
     async fn send_soundboard_msg(
         &self,
         ctx: &Context,
@@ -141,13 +145,16 @@ impl Handler {
     ) {
         self.join_channel(&ctx, voice_channel_id, &guild_id).await;
 
+        // Vector with streams of event for each button.
         let streams_vec: Vec<_> = self.send_soundboard_msg(ctx, msg_channel_id).await
             .iter()
             .map(|message| message.await_component_interaction(&ctx.shard).stream())
             .collect();
 
+        // Combine all the streams together in one single stream.
         let mut combined_stream = stream::select_all(streams_vec); 
 
+        // Listen the combined stream to get interactions.
         while let Some(interaction) = combined_stream.next().await {
             if let Some((_, _, found_path)) = self.soundboard_data
                 .iter()
