@@ -6,6 +6,7 @@ use serenity::all::ChannelId;
 use serenity::all::CreateInteractionResponse;
 use serenity::all::CreateMessage;
 use serenity::all::GuildId;
+use serenity::all::Http;
 use serenity::async_trait;
 use serenity::builder::CreateButton;
 use serenity::builder::GetMessages;
@@ -16,7 +17,10 @@ use songbird::input::Compose;
 use songbird::input::File;
 use songbird::input::YoutubeDl;
 use songbird::tracks::TrackQueue;
+use songbird::Event;
 use songbird::SerenityInit;
+use songbird::TrackEvent;
+use songbird::{EventContext, EventHandler as VoiceEventHandler};
 use std::collections::HashMap;
 use std::fs;
 use std::io;
@@ -68,6 +72,28 @@ struct Handler {
     tracks: Arc<tokioMutex<HashMap<GuildId, TrackQueue>>>,
 }
 
+struct SongStartNotifier {
+    chan_id: ChannelId,
+    http: Arc<Http>,
+    title: String,
+    video_url: String,
+}
+
+#[async_trait]
+impl VoiceEventHandler for SongStartNotifier {
+    async fn act(&self, ctx: &EventContext<'_>) -> Option<Event> {
+        if let EventContext::Track(track_list) = ctx {
+            let formatted_message =
+                format!("**Now playing:** [{}]({})", self.title, self.video_url);
+            if let Err(err) = self.chan_id.say(&self.http, formatted_message).await {
+                eprintln!("Failed to send message: {}", err);
+            }
+        }
+
+        None
+    }
+}
+
 #[async_trait]
 impl EventHandler for Handler {
     async fn message(&self, ctx: Context, msg: Message) {
@@ -108,7 +134,35 @@ impl EventHandler for Handler {
         } else if msg.content.starts_with("!skip") {
             if let Some(_channel_id) = self.get_channel_id(&ctx, &msg).await {
                 if let Some(guild_id) = msg.guild_id {
-                    self.skip_song(&ctx, &guild_id).await;
+                    self.skip_song(&guild_id).await;
+                }
+            } else {
+                if let Err(_) = msg
+                    .channel_id
+                    .say(&ctx.http, "You must join a channel first")
+                    .await
+                {
+                    println!("Error on sending message.");
+                };
+            }
+        } else if msg.content.starts_with("!pause") {
+            if let Some(_channel_id) = self.get_channel_id(&ctx, &msg).await {
+                if let Some(guild_id) = msg.guild_id {
+                    self.pause_song(&guild_id).await;
+                }
+            } else {
+                if let Err(_) = msg
+                    .channel_id
+                    .say(&ctx.http, "You must join a channel first")
+                    .await
+                {
+                    println!("Error on sending message.");
+                };
+            }
+        } else if msg.content.starts_with("!resume") {
+            if let Some(_channel_id) = self.get_channel_id(&ctx, &msg).await {
+                if let Some(guild_id) = msg.guild_id {
+                    self.resume_song(&guild_id).await;
                 }
             } else {
                 if let Err(_) = msg
@@ -153,7 +207,6 @@ impl Handler {
             .or_insert(TrackQueue::new());
 
         let do_search = !url.starts_with("http");
-        println!("Passed value {:?}", url);
         self.join_channel(&ctx, &channel_id, &guild_id).await;
 
         let http_client = {
@@ -171,12 +224,12 @@ impl Handler {
         if let Some(handler_lock) = manager.get(guild_id) {
             let mut handler = handler_lock.lock().await;
             let mut src = if do_search {
-                println!("In do search");
                 YoutubeDl::new_search(http_client, url)
             } else {
-                println!("Not in do search");
                 YoutubeDl::new(http_client, url)
             };
+
+            println!("{:?}", src);
 
             let metadata = src.aux_metadata().await;
 
@@ -187,19 +240,33 @@ impl Handler {
                     .as_deref()
                     .unwrap_or("URL not available");
 
-                let formatted_message = format!("**Now playing:** [{}]({})", title, video_url);
+                let guard = self.tracks.lock().await;
+                if let Some(queue) = guard.get(&guild_id) {
 
-                let _ = msg_channel_id.say(&ctx.http, formatted_message).await;
+                    if queue.len() > 0 {
+                        let formatted_message =
+                            format!("**Added to the queue:** [{}]({})", title, video_url);
+                        if let Err(err) = msg_channel_id.say(&ctx.http, formatted_message).await {
+                            eprintln!("Failed to send message: {}", err);
+                        }
+                    }
+
+                    let track_handler = queue.add_source(src.clone().into(), &mut handler).await;
+
+                    let send_http = ctx.http.clone();
+
+                    let _ = track_handler.add_event(
+                        Event::Track(TrackEvent::Play),
+                        SongStartNotifier {
+                            chan_id: msg_channel_id.clone(),
+                            http: send_http,
+                            title: title.to_string(),
+                            video_url: video_url.to_string(),
+                        },
+                    );
+                }
             } else {
                 println!("Failed to fetch aux metadata: {:?}", metadata.unwrap_err());
-            }
-
-            println!("{:?}", src);
-
-            let guard = self.tracks.lock().await;
-            if let Some(queue) = guard.get(&guild_id) {
-                queue.add_source(src.clone().into(), &mut handler).await;
-                println!("Current queue status: {:?}", queue);
             }
         } else {
             println!("Not in a channel");
@@ -209,6 +276,18 @@ impl Handler {
     async fn skip_song(&self, guild_id: &GuildId) {
         if let Some(track_handle) = self.tracks.lock().await.get(guild_id) {
             let _ = track_handle.skip();
+        }
+    }
+
+    async fn pause_song(&self, guild_id: &GuildId) {
+        if let Some(track_handle) = self.tracks.lock().await.get(guild_id) {
+            let _ = track_handle.pause();
+        }
+    }
+
+    async fn resume_song(&self, guild_id: &GuildId) {
+        if let Some(track_handle) = self.tracks.lock().await.get(guild_id) {
+            let _ = track_handle.resume();
         }
     }
 
