@@ -1,61 +1,71 @@
 use futures::future::join_all;
 use futures::stream::{self};
+use reqwest::Client as HttpClient;
+use serenity::all::ButtonStyle;
 use serenity::all::ChannelId;
 use serenity::all::CreateInteractionResponse;
 use serenity::all::CreateMessage;
 use serenity::all::GuildId;
-use serenity::all::ButtonStyle;
 use serenity::async_trait;
 use serenity::builder::CreateButton;
 use serenity::builder::GetMessages;
 use serenity::futures::StreamExt;
 use serenity::model::channel::Message;
 use serenity::prelude::*;
+use songbird::input::Compose;
 use songbird::input::File;
+use songbird::input::YoutubeDl;
+use songbird::tracks::TrackQueue;
 use songbird::SerenityInit;
+use std::collections::HashMap;
+use std::fs;
+use std::io;
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-use std::io;
-use std::fs;
-use std::path::Path;
+use tokio::sync::Mutex as tokioMutex;
 use tokio::time;
 
 const AUDIO_PATH: &str = "./audio/";
 
-fn get_soundboard_data(location: &str) -> 
-Result<Vec<(String, String, String)>, io::Error>{ 
+fn get_soundboard_data(location: &str) -> Result<Vec<(String, String, String)>, io::Error> {
     let path = Path::new(location);
     let mut result = Vec::<(String, String, String)>::new();
 
     if path.is_dir() {
-        for (index, file) in fs::read_dir(path)?.enumerate(){
-            
+        for (index, file) in fs::read_dir(path)?.enumerate() {
             let path = file?.path();
 
             if path.is_file() {
-                if let Some(file_name) = path.file_name().and_then(
-                    |name| name.to_str()){
-
+                if let Some(file_name) = path.file_name().and_then(|name| name.to_str()) {
                     if let Some(tmp_path) = Path::new(file_name)
                         .file_stem()
-                        .and_then(|stem| stem.to_str()) {
-                            result.push((index.to_string(), 
-                                    tmp_path.to_string(),
-                                    file_name.to_string()));
-                        };
-                    
+                        .and_then(|stem| stem.to_str())
+                    {
+                        result.push((
+                            index.to_string(),
+                            tmp_path.to_string(),
+                            file_name.to_string(),
+                        ));
+                    };
                 }
             }
-
         }
     }
     Ok(result)
 }
 
+struct HttpKey;
+
+impl TypeMapKey for HttpKey {
+    type Value = HttpClient;
+}
+
 struct Handler {
     last_interaction: Arc<Mutex<Instant>>,
     soundboard_data: Vec<(String, String, String)>,
+    tracks: Arc<tokioMutex<HashMap<GuildId, TrackQueue>>>,
 }
 
 #[async_trait]
@@ -68,6 +78,37 @@ impl EventHandler for Handler {
                 if let Some(guild_id) = msg.guild_id {
                     self.soundboard_handler(&ctx, &msg.channel_id, guild_id, &channel_id)
                         .await;
+                }
+            } else {
+                if let Err(_) = msg
+                    .channel_id
+                    .say(&ctx.http, "You must join a channel first")
+                    .await
+                {
+                    println!("Error on sending message.");
+                };
+            }
+        } else if msg.content.starts_with("!play ") {
+            let mut song_name = msg.content.clone();
+            song_name.drain(..6);
+            if let Some(channel_id) = self.get_channel_id(&ctx, &msg).await {
+                if let Some(guild_id) = msg.guild_id {
+                    self.play_song_yt(&ctx, song_name, guild_id, channel_id, msg.channel_id)
+                        .await;
+                }
+            } else {
+                if let Err(_) = msg
+                    .channel_id
+                    .say(&ctx.http, "You must join a channel first")
+                    .await
+                {
+                    println!("Error on sending message.");
+                };
+            }
+        } else if msg.content.starts_with("!skip") {
+            if let Some(_channel_id) = self.get_channel_id(&ctx, &msg).await {
+                if let Some(guild_id) = msg.guild_id {
+                    self.skip_song(&ctx, &guild_id).await;
                 }
             } else {
                 if let Err(_) = msg
@@ -97,24 +138,97 @@ impl Handler {
         None
     }
 
-    // Returns a list of messages. 
+    async fn play_song_yt(
+        &self,
+        ctx: &Context,
+        url: String,
+        guild_id: GuildId,
+        channel_id: ChannelId,
+        msg_channel_id: ChannelId,
+    ) {
+        self.tracks
+            .lock()
+            .await
+            .entry(guild_id)
+            .or_insert(TrackQueue::new());
+
+        let do_search = !url.starts_with("http");
+        println!("Passed value {:?}", url);
+        self.join_channel(&ctx, &channel_id, &guild_id).await;
+
+        let http_client = {
+            let data = ctx.data.read().await;
+            data.get::<HttpKey>()
+                .cloned()
+                .expect("Guaranteed to exist in the typemap.")
+        };
+
+        let manager = songbird::get(ctx)
+            .await
+            .expect("Songbird Voice client placed in at initialization.")
+            .clone();
+
+        if let Some(handler_lock) = manager.get(guild_id) {
+            let mut handler = handler_lock.lock().await;
+            let mut src = if do_search {
+                println!("In do search");
+                YoutubeDl::new_search(http_client, url)
+            } else {
+                println!("Not in do search");
+                YoutubeDl::new(http_client, url)
+            };
+
+            let metadata = src.aux_metadata().await;
+
+            if let Ok(aux_metadata) = metadata {
+                let title = aux_metadata.title.as_deref().unwrap_or("Unknown Title");
+                let video_url = aux_metadata
+                    .source_url
+                    .as_deref()
+                    .unwrap_or("URL not available");
+
+                let formatted_message = format!("**Now playing:** [{}]({})", title, video_url);
+
+                let _ = msg_channel_id.say(&ctx.http, formatted_message).await;
+            } else {
+                println!("Failed to fetch aux metadata: {:?}", metadata.unwrap_err());
+            }
+
+            println!("{:?}", src);
+
+            let guard = self.tracks.lock().await;
+            if let Some(queue) = guard.get(&guild_id) {
+                queue.add_source(src.clone().into(), &mut handler).await;
+                println!("Current queue status: {:?}", queue);
+            }
+        } else {
+            println!("Not in a channel");
+        }
+    }
+
+    async fn skip_song(&self, guild_id: &GuildId) {
+        if let Some(track_handle) = self.tracks.lock().await.get(guild_id) {
+            let _ = track_handle.skip();
+        }
+    }
+
+    // Returns a list of messages.
     // We are not sending a single big message since Discord
-    // does not allow to send messages with more than 25 buttons. 
-    // Here we send a list of messages with 25 buttons each. 
+    // does not allow to send messages with more than 25 buttons.
+    // Here we send a list of messages with 25 buttons each.
     async fn send_soundboard_msg(
         &self,
         ctx: &Context,
         channel_id: &ChannelId,
     ) -> Vec<serenity::model::channel::Message> {
-
-        let mut messages_vec = 
-            Vec::<serenity::model::channel::Message>::new();
+        let mut messages_vec = Vec::<serenity::model::channel::Message>::new();
 
         let mut msg = CreateMessage::new().content("Soundboard\n");
 
-        for (id, button_label, _) in self.soundboard_data
-        .iter()
-        .map(|tuple| (tuple.0.as_str(), tuple.1.as_str(), tuple.2.as_str()))
+        for (id, button_label, _) in self
+            .soundboard_data
+            .iter()
+            .map(|tuple| (tuple.0.as_str(), tuple.1.as_str(), tuple.2.as_str()))
         {
             let parsed_int = id.parse::<usize>().expect("error parsiung index");
             if parsed_int % 25 == 0 && parsed_int > 1 {
@@ -125,15 +239,23 @@ impl Handler {
 
             msg = msg.button(CreateButton::new(id).label(button_label));
         }
-        
+
         messages_vec.push(channel_id.send_message(ctx, msg).await.unwrap());
         msg = CreateMessage::new();
 
-        msg = msg.button(CreateButton::new("stop").label("STOP").style(ButtonStyle::Danger));
-        msg = msg.button(CreateButton::new("quit").label("QUIT").style(ButtonStyle::Danger));
+        msg = msg.button(
+            CreateButton::new("stop")
+                .label("STOP")
+                .style(ButtonStyle::Danger),
+        );
+        msg = msg.button(
+            CreateButton::new("quit")
+                .label("QUIT")
+                .style(ButtonStyle::Danger),
+        );
 
         messages_vec.push(channel_id.send_message(ctx, msg).await.unwrap());
-            messages_vec
+        messages_vec
     }
 
     async fn soundboard_handler(
@@ -146,26 +268,29 @@ impl Handler {
         self.join_channel(&ctx, voice_channel_id, &guild_id).await;
 
         // Vector with streams of event for each button.
-        let streams_vec: Vec<_> = self.send_soundboard_msg(ctx, msg_channel_id).await
+        let streams_vec: Vec<_> = self
+            .send_soundboard_msg(ctx, msg_channel_id)
+            .await
             .iter()
             .map(|message| message.await_component_interaction(&ctx.shard).stream())
             .collect();
 
         // Combine all the streams together in one single stream.
-        let mut combined_stream = stream::select_all(streams_vec); 
+        let mut combined_stream = stream::select_all(streams_vec);
 
         // Listen the combined stream to get interactions.
         while let Some(interaction) = combined_stream.next().await {
-            if let Some((_, _, found_path)) = self.soundboard_data
+            if let Some((_, _, found_path)) = self
+                .soundboard_data
                 .iter()
                 .find(|&(item_id, _, _)| item_id == interaction.data.custom_id.as_str())
             {
-                    self.join_channel(&ctx, &voice_channel_id, &guild_id).await;
-                    let path = PathBuf::from(AUDIO_PATH.to_owned() + found_path);
-                    self.play_from_source(&ctx, &guild_id, path).await;
+                self.join_channel(&ctx, &voice_channel_id, &guild_id).await;
+                let path = PathBuf::from(AUDIO_PATH.to_owned() + found_path);
+                self.play_from_source(&ctx, &guild_id, path).await;
 
-                    let mut last_interaction = self.last_interaction.lock().unwrap();
-                    *last_interaction = Instant::now();
+                let mut last_interaction = self.last_interaction.lock().unwrap();
+                *last_interaction = Instant::now();
             } else if interaction.data.custom_id == "stop" {
                 self.stop_reproduction(&ctx, &guild_id).await;
             } else if interaction.data.custom_id == "quit" {
@@ -254,7 +379,7 @@ impl Handler {
 
     async fn start_inactivity_checker(&self, ctx: &Context, guild_id: &GuildId) {
         let last_interaction = Arc::clone(&self.last_interaction);
-        
+
         let manager = songbird::get(ctx)
             .await
             .expect("Songbird Voice client placed in at initialisation")
@@ -292,8 +417,10 @@ async fn main() {
             last_interaction: Arc::new(Mutex::new(Instant::now())),
             soundboard_data: get_soundboard_data(AUDIO_PATH)
                 .expect("Failed to load soundboard data"),
+            tracks: Arc::new(tokioMutex::new(HashMap::new())),
         })
         .register_songbird()
+        .type_map_insert::<HttpKey>(HttpClient::new())
         .await
         .expect("Error creating the client");
 
