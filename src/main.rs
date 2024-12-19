@@ -477,7 +477,7 @@ impl Handler {
         let c_guild_id = guild_id.clone();
 
         tokio::spawn(async move {
-            let timeout_duration = Duration::from_secs(10);
+            let timeout_duration = Duration::from_secs(15*60);
             let mut interval = time::interval(Duration::from_secs(60));
 
             loop {
