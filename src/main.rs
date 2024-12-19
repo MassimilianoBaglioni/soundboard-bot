@@ -1,35 +1,33 @@
-use futures::future::join_all;
-use futures::stream::{self};
-use reqwest::Client as HttpClient;
-use serenity::all::ButtonStyle;
-use serenity::all::ChannelId;
-use serenity::all::CreateInteractionResponse;
-use serenity::all::CreateMessage;
-use serenity::all::GuildId;
-use serenity::all::Http;
-use serenity::async_trait;
-use serenity::builder::CreateButton;
-use serenity::builder::GetMessages;
-use serenity::futures::StreamExt;
-use serenity::model::channel::Message;
-use serenity::prelude::*;
-use songbird::input::Compose;
-use songbird::input::File;
-use songbird::input::YoutubeDl;
-use songbird::tracks::TrackQueue;
-use songbird::Event;
-use songbird::SerenityInit;
-use songbird::TrackEvent;
-use songbird::{EventContext, EventHandler as VoiceEventHandler};
 use std::collections::HashMap;
 use std::fs;
 use std::io;
-use std::path::Path;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+
 use tokio::sync::Mutex as tokioMutex;
 use tokio::time;
+
+use futures::future::join_all;
+use futures::stream::{self};
+
+use reqwest::Client as HttpClient;
+
+use serenity::all::CreateAttachment;
+use serenity::all::EditProfile;
+use serenity::all::{
+    ButtonStyle, ChannelId, CreateInteractionResponse, CreateMessage, Error, GuildId, Http,
+};
+use serenity::async_trait;
+use serenity::builder::{CreateButton, GetMessages};
+use serenity::futures::StreamExt;
+use serenity::model::channel::Message;
+use serenity::prelude::*;
+
+use songbird::input::{Compose, File, YoutubeDl};
+use songbird::tracks::TrackQueue;
+use songbird::{Event, SerenityInit, TrackEvent};
+use songbird::{EventContext, EventHandler as VoiceEventHandler};
 
 const AUDIO_PATH: &str = "./audio/";
 
@@ -82,7 +80,7 @@ struct SongStartNotifier {
 #[async_trait]
 impl VoiceEventHandler for SongStartNotifier {
     async fn act(&self, ctx: &EventContext<'_>) -> Option<Event> {
-        if let EventContext::Track(track_list) = ctx {
+        if let EventContext::Track(_track_list) = ctx {
             let formatted_message =
                 format!("**Now playing:** [{}]({})", self.title, self.video_url);
             if let Err(err) = self.chan_id.say(&self.http, formatted_message).await {
@@ -178,6 +176,18 @@ impl EventHandler for Handler {
 }
 
 impl Handler {
+    async fn update_avatar(&self, ctx: &Context) -> Result<(), serenity::Error> {
+        let avatar = CreateAttachment::path("./avatar.png").await?;
+
+        let mut current_user = ctx.cache.current_user().clone(); // Ensure it is cloned here to avoid borrowing issues.
+
+        current_user
+            .edit(&ctx.http, EditProfile::new().avatar(&avatar))
+            .await?;
+
+        Ok(())
+    }
+
     async fn get_channel_id(&self, ctx: &Context, msg: &Message) -> Option<ChannelId> {
         if let Some(guild_id) = msg.guild_id {
             if let Some(guild) = guild_id.to_guild_cached(ctx) {
@@ -216,6 +226,10 @@ impl Handler {
                 .expect("Guaranteed to exist in the typemap.")
         };
 
+        /*if let Err(e) = self.update_avatar(ctx).await {
+            eprintln!("Failed to update avatar: {}", e);
+        }*/
+
         let manager = songbird::get(ctx)
             .await
             .expect("Songbird Voice client placed in at initialization.")
@@ -229,8 +243,6 @@ impl Handler {
                 YoutubeDl::new(http_client, url)
             };
 
-            println!("{:?}", src);
-
             let metadata = src.aux_metadata().await;
 
             if let Ok(aux_metadata) = metadata {
@@ -242,7 +254,6 @@ impl Handler {
 
                 let guard = self.tracks.lock().await;
                 if let Some(queue) = guard.get(&guild_id) {
-
                     if queue.len() > 0 {
                         let formatted_message =
                             format!("**Added to the queue:** [{}]({})", title, video_url);
@@ -311,7 +322,6 @@ impl Handler {
         {
             let parsed_int = id.parse::<usize>().expect("error parsiung index");
             if parsed_int % 25 == 0 && parsed_int > 1 {
-                println!("Entered=");
                 messages_vec.push(channel_id.send_message(ctx, msg).await.unwrap());
                 msg = CreateMessage::new();
             }
@@ -458,6 +468,7 @@ impl Handler {
 
     async fn start_inactivity_checker(&self, ctx: &Context, guild_id: &GuildId) {
         let last_interaction = Arc::clone(&self.last_interaction);
+        let tracks_hash_map = Arc::clone(&self.tracks);
 
         let manager = songbird::get(ctx)
             .await
@@ -466,13 +477,23 @@ impl Handler {
         let c_guild_id = guild_id.clone();
 
         tokio::spawn(async move {
-            let timeout_duration = Duration::from_secs(15 * 60);
+            let timeout_duration = Duration::from_secs(10);
             let mut interval = time::interval(Duration::from_secs(60));
 
             loop {
                 interval.tick().await;
                 let last_interaction_time = *last_interaction.lock().unwrap();
-                if last_interaction_time.elapsed() >= timeout_duration {
+                //Here we get the track handle for the current server.
+                let guard = tracks_hash_map.lock().await;
+
+                let mut queued_cnt = 0;
+
+                if let Some(crt_queue) = guard.get(&c_guild_id){
+                    queued_cnt = crt_queue.len();
+                };
+
+                //If no song is playing and the interaction time is over, quit.
+                if last_interaction_time.elapsed() >= timeout_duration && queued_cnt == 0 {
                     let _ = manager.leave(c_guild_id).await;
                     break;
                 }
