@@ -1,0 +1,124 @@
+
+                    GNU GENERAL PUBLIC LICENSE
+                       Version 3, 29 June 2007
+
+Copyright (C) [2024]  [Massimiliano Baglioni]
+Everyone is permitted to copy and distribute verbatim copies
+of this license document, but changing it is not allowed.
+
+                            Preamble
+
+The GNU General Public License is a free, copyleft license for software
+and other kinds of works.  The licenses for most software and other
+practical works are designed to take away your freedom to share and
+change the works.  By contrast, the GNU General Public License is
+intended to guarantee your freedom to share and change all versions
+of a program—to make sure it remains free software for all its users.
+We, the Free Software Foundation, use the GNU General Public License
+for most of our software; it applies also to any other work released
+this way by its authors.  You can apply it to your programs, too.
+
+When we speak of free software, we are referring to freedom, not
+price.  To understand the concept, you should think of free as in
+"free speech," not as in "free beer."
+
+The GPL grants you the following freedoms:
+1. The freedom to use the program for any purpose.
+2. The freedom to study how the program works, and change it to make it do
+   what you wish.  Access to the source code is a precondition for this.
+3. The freedom to redistribute copies of the program so you can help others.
+4. The freedom to distribute copies of your modified versions to others.
+   By doing this you can give the whole community a chance to benefit
+   from your changes.  Access to the source code is a precondition for
+   this.
+
+To protect your rights, we need to make restrictions that prohibit
+distributors from denying you these freedoms or asking you to surrender
+these rights.  These restrictions translate to certain responsibilities
+for you if you distribute copies of the software or if you modify it.
+
+For example, if you distribute copies of the software, you must pass on
+the same freedoms to the recipients.  You must make sure that they receive
+or can get the source code.  And you must show them these terms so they
+know their rights.
+
+                    TERMS AND CONDITIONS
+
+0. Definitions.
+
+  "This License" refers to version 3 of the GNU General Public License.
+
+  "Copyright" also means copyright-like laws that apply to other kinds of
+  works, such as semiconductor masks.
+
+  "The Program" refers to any copyrightable work licensed under this
+  License.  Each licensee is addressed as "you".  "Licensor" means the
+  individual, individuals, or entity that is granting you the rights under
+  this License.
+
+1. You may copy, modify, distribute, and perform the work, even
+   commercially, as long as you follow the terms of this license.
+
+2. You must release the source code of your work and any modified
+   versions under this license if you distribute the software.
+
+3. You may not impose any additional restrictions on the rights
+   granted by this license.
+
+4. You must keep the license text and any copyright notices intact.
+   
+5. When you distribute the program (either in original or modified form),
+   you must make sure that users have access to the source code. This means
+   that you must either distribute the source code, or offer a written offer
+   to provide the source code for no more than the cost of distribution.
+
+6. If you modify the program and distribute it, you must state that you have
+   changed the program, and the date of the change.
+
+7. If you include a modified version of the program in your project, your
+   project must be licensed under the GPL.
+
+8. If you distribute the software, you must ensure that everyone who
+   receives a copy of the program also receives the same rights under
+   this license.
+
+9. The GNU General Public License does not grant permission to use the
+   trade names, trademarks, service marks, or product names of the
+   Licensor, except as required for describing the origin of the Program
+   and reproducing the content of the NOTICE file.
+
+10. You are not required to use the GPL for your own private use of the
+    program, but if you distribute the software or derivative works,
+    you must comply with the GPL.
+
+11. WARRANTY DISCLAIMER: The Program is licensed "as is", without any
+    warranty of any kind. You can’t hold the authors or copyright holders
+    responsible for any damages caused by using the program.
+
+                    END OF TERMS AND CONDITIONS
+
+How to Apply These Terms to Your New Programs:
+
+If you develop a new program and you want it to be of the greatest possible
+benefit to the public, the best way to achieve this is to make it free software
+which everyone can redistribute and change under these terms.
+
+To do so, attach the following notices to your program.  It is safest to
+attach them to the start of each source file to most effectively convey the
+information to the users.
+
+    [Program Name] is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation, either version 3 of the License, or
+    (at your option) any later version.
+
+    [Program Name] is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+For more details on the full text, visit the official [GNU General Public License page](https://www.gnu.org/licenses/gpl-3.0.html).
+
