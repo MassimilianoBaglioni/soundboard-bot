@@ -1,4 +1,5 @@
 /target
 audio/*
 !audio/.gitkeep
+/src/.env
 .DS_Store
