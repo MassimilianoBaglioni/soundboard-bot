@@ -17,6 +17,11 @@ use tokio::time;
 
 use crate::{Data, HttpKey};
 
+use std::process::Command;
+use std::process::Stdio;
+use serde_json;
+use serde_json::Value;
+
 
 struct SongStartNotifier {
     chan_id: ChannelId,
@@ -266,4 +271,34 @@ pub async fn resume_song(guild_id: &GuildId, data: &Data) {
     if let Some(track_handle) = data.tracks.lock().await.get(guild_id) {
         let _ = track_handle.resume();
     }
+}
+
+pub fn get_urls_playlist(url: String) -> Vec<String>{
+    let mut result = Vec::<String>::new();
+
+    let output = Command::new("yt-dlp")
+        .arg("-j")
+        .arg("--flat-playlist")
+        .arg(url)
+        .stdout(Stdio::piped())
+        .output()
+        .expect("Failed to execute yt-dlp command");
+
+    let output_str = std::str::from_utf8(&output.stdout).expect("Invalid UTF-8 output");
+
+    for line in output_str.lines() {
+        // Parse each line as a JSON object
+        let video_info: Value = serde_json::from_str(line)
+            .expect("Failed to parse JSON line");
+
+        // Extract the 'url' field from the JSON object
+        if let Some(url) = video_info.get("url").and_then(|u| u.as_str()) {
+            println!("{}", url);
+            result.push(url.to_string());
+        } else {
+            eprintln!("No URL found in video entry");
+        }
+    }
+
+    return result;
 }
