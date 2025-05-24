@@ -22,6 +22,8 @@ use serde_json::Value;
 use std::process::Command;
 use std::process::Stdio;
 
+const PLAYLIST_LIMIT: Option<usize> = Some(200);
+
 struct SongStartNotifier {
     chan_id: ChannelId,
     http: Arc<Http>,
@@ -210,7 +212,7 @@ pub async fn play_song_yt(
         let mut handler = handler_lock.lock().await;
         if is_playlist {
             println!("Playlist handling");
-            let urls = get_urls_playlist(url);
+            let urls = get_urls_playlist(url, PLAYLIST_LIMIT);
             let formatted_message = format!("**Enqueuing:** [{}] songs.", urls.len());
             if let Err(err) = msg_channel_id.say(&ctx.http, formatted_message).await {
                 eprintln!("Failed to send message: {}", err);
@@ -299,6 +301,13 @@ pub async fn play_song_yt(
     }
 }
 
+pub async fn clear(guild_id: &GuildId, data: &Data) {
+    let guard = data.tracks.lock().await;
+    if let Some(queue) = guard.get(&guild_id) {
+        queue.stop();
+    }
+}
+
 pub async fn skip_song(guild_id: &GuildId, data: &Data) {
     if let Some(track_handle) = data.tracks.lock().await.get(guild_id) {
         let _ = track_handle.skip();
@@ -317,13 +326,18 @@ pub async fn resume_song(guild_id: &GuildId, data: &Data) {
     }
 }
 
-pub fn get_urls_playlist(url: String) -> Vec<String> {
+pub fn get_urls_playlist(url: String, limit: Option<usize>) -> Vec<String> {
     let mut result = Vec::<String>::new();
 
-    let output = Command::new("yt-dlp")
-        .arg("-j")
-        .arg("--flat-playlist")
-        .arg(url)
+    let mut cmd = Command::new("yt-dlp");
+    cmd.arg("-j").arg("--flat-playlist").arg(&url);
+
+    // Add yt-dlp limit if specified
+    if let Some(max_items) = limit {
+        cmd.arg("--playlist-end").arg(max_items.to_string());
+    }
+
+    let output = cmd
         .stdout(Stdio::piped())
         .output()
         .expect("Failed to execute yt-dlp command");
@@ -331,6 +345,13 @@ pub fn get_urls_playlist(url: String) -> Vec<String> {
     let output_str = std::str::from_utf8(&output.stdout).expect("Invalid UTF-8 output");
 
     for line in output_str.lines() {
+        // Double-check limit in case yt-dlp didn't respect it
+        if let Some(max_items) = limit {
+            if result.len() >= max_items {
+                break;
+            }
+        }
+
         // Parse each line as a JSON object
         let video_info: Value = serde_json::from_str(line).expect("Failed to parse JSON line");
 
@@ -343,5 +364,5 @@ pub fn get_urls_playlist(url: String) -> Vec<String> {
         }
     }
 
-    return result;
+    result
 }
