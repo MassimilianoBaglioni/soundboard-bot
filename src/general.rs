@@ -4,8 +4,8 @@ use std::time::{Duration, Instant};
 
 use futures::future::join_all;
 
-use serenity::async_trait;
 use serenity::all::{ChannelId, Context, GuildId, Http, UserId};
+use serenity::async_trait;
 use serenity::builder::GetMessages;
 
 use songbird::input::{Compose, File, YoutubeDl};
@@ -17,11 +17,10 @@ use tokio::time;
 
 use crate::{Data, HttpKey};
 
-use std::process::Command;
-use std::process::Stdio;
 use serde_json;
 use serde_json::Value;
-
+use std::process::Command;
+use std::process::Stdio;
 
 struct SongStartNotifier {
     chan_id: ChannelId,
@@ -70,7 +69,7 @@ pub async fn join_channel(ctx: &Context, guild_id: &GuildId, author_id: &UserId,
         .clone();
 
     let voice_channel_id = match get_user_voice_channel(ctx, author_id, guild_id).await {
-    Some(id) => id,
+        Some(id) => id,
         None => return,
     };
 
@@ -192,6 +191,7 @@ pub async fn play_song_yt(
         .or_insert(TrackQueue::new());
 
     let do_search = !url.starts_with("http");
+    let is_playlist = url.contains("list=");
     join_channel(ctx, &guild_id, author_id, data).await;
 
     let http_client = {
@@ -208,47 +208,91 @@ pub async fn play_song_yt(
 
     if let Some(handler_lock) = manager.get(guild_id) {
         let mut handler = handler_lock.lock().await;
-        let mut src = if do_search {
-            YoutubeDl::new_search(http_client, url)
-        } else {
-            YoutubeDl::new(http_client, url)
-        };
+        if is_playlist {
+            println!("Playlist handling");
+            let urls = get_urls_playlist(url);
+            let formatted_message = format!("**Enqueuing:** [{}] songs.", urls.len());
+            if let Err(err) = msg_channel_id.say(&ctx.http, formatted_message).await {
+                eprintln!("Failed to send message: {}", err);
+            }
 
-        let metadata = src.aux_metadata().await;
+            for i in urls {
+                println!("Processing: {}", i);
 
-        if let Ok(aux_metadata) = metadata {
-            let title = aux_metadata.title.as_deref().unwrap_or("Unknown Title");
-            let video_url = aux_metadata
-                .source_url
-                .as_deref()
-                .unwrap_or("URL not available");
+                let mut src = YoutubeDl::new(http_client.clone(), i);
+                let metadata = src.aux_metadata().await;
 
-            let guard = data.tracks.lock().await;
-            if let Some(queue) = guard.get(&guild_id) {
-                if !queue.is_empty() {
-                    let formatted_message =
-                        format!("**Added to the queue:** [{}]({})", title, video_url);
-                    if let Err(err) = msg_channel_id.say(&ctx.http, formatted_message).await {
-                        eprintln!("Failed to send message: {}", err);
+                if let Ok(aux_metadata) = metadata {
+                    let title = aux_metadata.title.as_deref().unwrap_or("Unknown Title");
+                    let video_url = aux_metadata
+                        .source_url
+                        .as_deref()
+                        .unwrap_or("URL not available");
+
+                    let guard = data.tracks.lock().await;
+                    if let Some(queue) = guard.get(&guild_id) {
+                        let track_handler =
+                            queue.add_source(src.clone().into(), &mut handler).await;
+
+                        let send_http = ctx.http.clone();
+
+                        let _ = track_handler.add_event(
+                            Event::Track(TrackEvent::Play),
+                            SongStartNotifier {
+                                chan_id: msg_channel_id,
+                                http: send_http,
+                                title: title.to_string(),
+                                video_url: video_url.to_string(),
+                            },
+                        );
                     }
+                } else {
+                    println!("Failed to fetch aux metadata: {:?}", metadata.unwrap_err());
                 }
-
-                let track_handler = queue.add_source(src.clone().into(), &mut handler).await;
-
-                let send_http = ctx.http.clone();
-
-                let _ = track_handler.add_event(
-                    Event::Track(TrackEvent::Play),
-                    SongStartNotifier {
-                        chan_id: msg_channel_id,
-                        http: send_http,
-                        title: title.to_string(),
-                        video_url: video_url.to_string(),
-                    },
-                );
             }
         } else {
-            println!("Failed to fetch aux metadata: {:?}", metadata.unwrap_err());
+            let mut src = if do_search {
+                YoutubeDl::new_search(http_client, url)
+            } else {
+                YoutubeDl::new(http_client, url)
+            };
+
+            let metadata = src.aux_metadata().await;
+
+            if let Ok(aux_metadata) = metadata {
+                let title = aux_metadata.title.as_deref().unwrap_or("Unknown Title");
+                let video_url = aux_metadata
+                    .source_url
+                    .as_deref()
+                    .unwrap_or("URL not available");
+
+                let guard = data.tracks.lock().await;
+                if let Some(queue) = guard.get(&guild_id) {
+                    if !queue.is_empty() {
+                        let formatted_message =
+                            format!("**Added to the queue:** [{}]({})", title, video_url);
+                        if let Err(err) = msg_channel_id.say(&ctx.http, formatted_message).await {
+                            eprintln!("Failed to send message: {}", err);
+                        }
+                    }
+
+                    let track_handler = queue.add_source(src.clone().into(), &mut handler).await;
+
+                    let send_http = ctx.http.clone();
+
+                    let _ = track_handler.add_event(
+                        Event::Track(TrackEvent::Play),
+                        SongStartNotifier {
+                            chan_id: msg_channel_id,
+                            http: send_http,
+                            title: title.to_string(),
+                            video_url: video_url.to_string(),
+                        },
+                    );
+                }
+            } else {
+                println!("Failed to fetch aux metadata: {:?}", metadata.unwrap_err());
+            }
         }
     } else {
         println!("Not in a channel");
@@ -273,7 +317,7 @@ pub async fn resume_song(guild_id: &GuildId, data: &Data) {
     }
 }
 
-pub fn get_urls_playlist(url: String) -> Vec<String>{
+pub fn get_urls_playlist(url: String) -> Vec<String> {
     let mut result = Vec::<String>::new();
 
     let output = Command::new("yt-dlp")
@@ -288,8 +332,7 @@ pub fn get_urls_playlist(url: String) -> Vec<String>{
 
     for line in output_str.lines() {
         // Parse each line as a JSON object
-        let video_info: Value = serde_json::from_str(line)
-            .expect("Failed to parse JSON line");
+        let video_info: Value = serde_json::from_str(line).expect("Failed to parse JSON line");
 
         // Extract the 'url' field from the JSON object
         if let Some(url) = video_info.get("url").and_then(|u| u.as_str()) {
