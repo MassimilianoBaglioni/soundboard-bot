@@ -4,12 +4,15 @@ use std::time::{Duration, Instant};
 
 use futures::future::join_all;
 
+use futures::StreamExt;
+use rspotify::prelude::BaseClient;
+use rspotify::ClientCredsSpotify;
 use serenity::all::{ChannelId, Context, GuildId, Http, UserId};
 use serenity::async_trait;
 use serenity::builder::GetMessages;
 
 use songbird::input::{Compose, File, YoutubeDl};
-use songbird::tracks::TrackQueue;
+use songbird::tracks::{self, TrackQueue};
 use songbird::{Event, TrackEvent};
 use songbird::{EventContext, EventHandler as VoiceEventHandler};
 
@@ -22,7 +25,15 @@ use serde_json::Value;
 use std::process::Command;
 use std::process::Stdio;
 
+use rspotify::model::{AlbumId, PlayableItem, PlaylistId};
+
 const PLAYLIST_LIMIT: Option<usize> = Some(200);
+
+enum MultipleSongs {
+    YtPlaylist(Vec<String>),
+    SpotiPlaylist(Vec<String>),
+    SpotiAlbum(Vec<String>),
+}
 
 struct SongStartNotifier {
     chan_id: ChannelId,
@@ -193,7 +204,24 @@ pub async fn play_song_yt(
         .or_insert(TrackQueue::new());
 
     let do_search = !url.starts_with("http");
-    let is_playlist = url.contains("list=");
+
+    let multiple_songs = if url.contains("list=") {
+        Some(MultipleSongs::YtPlaylist(
+            get_urls_playlist(url.clone(), PLAYLIST_LIMIT, &data.spotify_client).await,
+        ))
+    } else if let Some(spoty_id) = get_spoty_playlist_id(&url) {
+        Some(MultipleSongs::SpotiPlaylist(
+            get_urls_playlist(spoty_id.to_string(), PLAYLIST_LIMIT, &data.spotify_client).await,
+        ))
+    } else if let Some(album_id) = get_spoty_album_id(&url) {
+        println!("Spoty album: {:?}", album_id);
+        Some(MultipleSongs::SpotiAlbum(
+            (get_urls_album(album_id.to_string(), &data.spotify_client)).await,
+        ))
+    } else {
+        None
+    };
+
     join_channel(ctx, &guild_id, author_id, data).await;
 
     let http_client = {
@@ -210,18 +238,68 @@ pub async fn play_song_yt(
 
     if let Some(handler_lock) = manager.get(guild_id) {
         let mut handler = handler_lock.lock().await;
-        if is_playlist {
-            println!("Playlist handling");
-            let urls = get_urls_playlist(url, PLAYLIST_LIMIT);
-            let formatted_message = format!("**Enqueuing:** [{}] songs.", urls.len());
-            if let Err(err) = msg_channel_id.say(&ctx.http, formatted_message).await {
-                eprintln!("Failed to send message: {}", err);
+
+        match multiple_songs {
+            Some(playlist) => {
+                // Extract tracks and determine the playlist type once
+                let (tracks, is_youtube) = match playlist {
+                    MultipleSongs::YtPlaylist(tracks) => (tracks, true),
+                    MultipleSongs::SpotiAlbum(tracks) | MultipleSongs::SpotiPlaylist(tracks) => {
+                        (tracks, false)
+                    }
+                };
+
+                println!("Playlist handling");
+                let formatted_message = format!("**Enqueuing:** [{}] songs.", tracks.len());
+                if let Err(err) = msg_channel_id.say(&ctx.http, formatted_message).await {
+                    eprintln!("Failed to send message: {}", err);
+                }
+
+                for i in tracks {
+                    println!("Processing: {}", i);
+
+                    // Use the boolean flag instead of matching again
+                    let mut src = if is_youtube {
+                        YoutubeDl::new(http_client.clone(), i)
+                    } else {
+                        YoutubeDl::new_search(http_client.clone(), i)
+                    };
+
+                    let metadata = src.aux_metadata().await;
+                    if let Ok(aux_metadata) = metadata {
+                        let title = aux_metadata.title.as_deref().unwrap_or("Unknown Title");
+                        let video_url = aux_metadata
+                            .source_url
+                            .as_deref()
+                            .unwrap_or("URL not available");
+                        let guard = data.tracks.lock().await;
+                        if let Some(queue) = guard.get(&guild_id) {
+                            let track_handler =
+                                queue.add_source(src.clone().into(), &mut handler).await;
+                            let send_http = ctx.http.clone();
+                            let _result = track_handler.add_event(
+                                // Fixed: was `let * = track`
+                                Event::Track(TrackEvent::Play),
+                                SongStartNotifier {
+                                    chan_id: msg_channel_id,
+                                    http: send_http,
+                                    title: title.to_string(),
+                                    video_url: video_url.to_string(),
+                                },
+                            );
+                        }
+                    } else {
+                        println!("Failed to fetch aux metadata: {:?}", metadata.unwrap_err());
+                    }
+                }
             }
+            None => {
+                let mut src = if do_search {
+                    YoutubeDl::new_search(http_client, url)
+                } else {
+                    YoutubeDl::new(http_client, url)
+                };
 
-            for i in urls {
-                println!("Processing: {}", i);
-
-                let mut src = YoutubeDl::new(http_client.clone(), i);
                 let metadata = src.aux_metadata().await;
 
                 if let Ok(aux_metadata) = metadata {
@@ -233,6 +311,15 @@ pub async fn play_song_yt(
 
                     let guard = data.tracks.lock().await;
                     if let Some(queue) = guard.get(&guild_id) {
+                        if !queue.is_empty() {
+                            let formatted_message =
+                                format!("**Added to the queue:** [{}]({})", title, video_url);
+                            if let Err(err) = msg_channel_id.say(&ctx.http, formatted_message).await
+                            {
+                                eprintln!("Failed to send message: {}", err);
+                            }
+                        }
+
                         let track_handler =
                             queue.add_source(src.clone().into(), &mut handler).await;
 
@@ -251,49 +338,6 @@ pub async fn play_song_yt(
                 } else {
                     println!("Failed to fetch aux metadata: {:?}", metadata.unwrap_err());
                 }
-            }
-        } else {
-            let mut src = if do_search {
-                YoutubeDl::new_search(http_client, url)
-            } else {
-                YoutubeDl::new(http_client, url)
-            };
-
-            let metadata = src.aux_metadata().await;
-
-            if let Ok(aux_metadata) = metadata {
-                let title = aux_metadata.title.as_deref().unwrap_or("Unknown Title");
-                let video_url = aux_metadata
-                    .source_url
-                    .as_deref()
-                    .unwrap_or("URL not available");
-
-                let guard = data.tracks.lock().await;
-                if let Some(queue) = guard.get(&guild_id) {
-                    if !queue.is_empty() {
-                        let formatted_message =
-                            format!("**Added to the queue:** [{}]({})", title, video_url);
-                        if let Err(err) = msg_channel_id.say(&ctx.http, formatted_message).await {
-                            eprintln!("Failed to send message: {}", err);
-                        }
-                    }
-
-                    let track_handler = queue.add_source(src.clone().into(), &mut handler).await;
-
-                    let send_http = ctx.http.clone();
-
-                    let _ = track_handler.add_event(
-                        Event::Track(TrackEvent::Play),
-                        SongStartNotifier {
-                            chan_id: msg_channel_id,
-                            http: send_http,
-                            title: title.to_string(),
-                            video_url: video_url.to_string(),
-                        },
-                    );
-                }
-            } else {
-                println!("Failed to fetch aux metadata: {:?}", metadata.unwrap_err());
             }
         }
     } else {
@@ -326,43 +370,105 @@ pub async fn resume_song(guild_id: &GuildId, data: &Data) {
     }
 }
 
-pub fn get_urls_playlist(url: String, limit: Option<usize>) -> Vec<String> {
-    let mut result = Vec::<String>::new();
+pub async fn get_urls_playlist(
+    url: String,
+    limit: Option<usize>,
+    spotify_client: &ClientCredsSpotify,
+) -> Vec<String> {
+    // url as a name of the parameter is mis leading, in this case it is parsed as an id already!
+    match PlaylistId::from_id(&url) {
+        Ok(playlist_id) => {
+            println!("Spotify playlist found: {:?}", playlist_id);
+            let mut urls = Vec::new();
+            let mut items = spotify_client.playlist_items(playlist_id, None, None);
 
-    let mut cmd = Command::new("yt-dlp");
-    cmd.arg("-j").arg("--flat-playlist").arg(&url);
-
-    // Add yt-dlp limit if specified
-    if let Some(max_items) = limit {
-        cmd.arg("--playlist-end").arg(max_items.to_string());
-    }
-
-    let output = cmd
-        .stdout(Stdio::piped())
-        .output()
-        .expect("Failed to execute yt-dlp command");
-
-    let output_str = std::str::from_utf8(&output.stdout).expect("Invalid UTF-8 output");
-
-    for line in output_str.lines() {
-        // Double-check limit in case yt-dlp didn't respect it
-        if let Some(max_items) = limit {
-            if result.len() >= max_items {
-                break;
+            while let Some(url) = items.next().await {
+                match url {
+                    Ok(playlist_item) => {
+                        if let Some(PlayableItem::Track(track)) = playlist_item.track {
+                            urls.push(track.name + " " + &track.artists[0].name);
+                        }
+                    }
+                    Err(e) => {
+                        println!("{:?}", e);
+                    }
+                }
             }
+
+            urls
         }
+        Err(e) => {
+            println!("Error on parsing spotify: {:?}", e);
+            let mut result = Vec::<String>::new();
 
-        // Parse each line as a JSON object
-        let video_info: Value = serde_json::from_str(line).expect("Failed to parse JSON line");
+            let mut cmd = Command::new("yt-dlp");
+            cmd.arg("-j").arg("--flat-playlist").arg(&url);
 
-        // Extract the 'url' field from the JSON object
-        if let Some(url) = video_info.get("url").and_then(|u| u.as_str()) {
-            println!("{}", url);
-            result.push(url.to_string());
-        } else {
-            eprintln!("No URL found in video entry");
+            // Add yt-dlp limit if specified
+            if let Some(max_items) = limit {
+                cmd.arg("--playlist-end").arg(max_items.to_string());
+            }
+
+            let output = cmd
+                .stdout(Stdio::piped())
+                .output()
+                .expect("Failed to execute yt-dlp command");
+
+            let output_str = std::str::from_utf8(&output.stdout).expect("Invalid UTF-8 output");
+
+            for line in output_str.lines() {
+                // Double-check limit in case yt-dlp didn't respect it
+                if let Some(max_items) = limit {
+                    if result.len() >= max_items {
+                        break;
+                    }
+                }
+
+                // Parse each line as a JSON object
+                let video_info: Value =
+                    serde_json::from_str(line).expect("Failed to parse JSON line");
+
+                // Extract the 'url' field from the JSON object
+                if let Some(url) = video_info.get("url").and_then(|u| u.as_str()) {
+                    println!("{}", url);
+                    result.push(url.to_string());
+                } else {
+                    eprintln!("No URL found in video entry");
+                }
+            }
+
+            result
         }
     }
+}
 
-    result
+pub async fn get_urls_album(
+    passed_album_id: String,
+    spotify_client: &ClientCredsSpotify,
+) -> Vec<String> {
+    match AlbumId::from_id(&passed_album_id) {
+        Ok(album_id) => {
+            println!("Spotify album found: {:?}", album_id);
+            let mut urls = Vec::new();
+            let items = spotify_client.album(album_id, None);
+
+            for track in items.await.expect("msg").tracks.items {
+                urls.push(track.name + " " + &track.artists[0].name);
+            }
+
+            urls
+        }
+        Err(e) => {
+            println!("Error on parsing spotify album: {:?}", e);
+            Vec::new()
+        }
+    }
+}
+
+fn get_spoty_playlist_id(url: &str) -> Option<&str> {
+    url.split("/playlist/").nth(1)?.split('?').next()
+}
+
+fn get_spoty_album_id(url: &str) -> Option<&str> {
+    url.split("/album/").nth(1)?.split('?').next()
 }

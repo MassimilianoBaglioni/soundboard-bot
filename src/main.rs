@@ -11,6 +11,8 @@ use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::Mutex;
 
+use rspotify::{ClientCredsSpotify, Credentials};
+
 use dotenvy::dotenv;
 use std::env;
 
@@ -20,6 +22,7 @@ struct Data {
     last_interaction: Arc<Mutex<Instant>>,
     soundboard_data: Vec<(String, String, String)>,
     tracks: Arc<Mutex<HashMap<GuildId, TrackQueue>>>,
+    spotify_client: ClientCredsSpotify,
 }
 
 struct HttpKey;
@@ -123,7 +126,17 @@ async fn play(
 #[tokio::main]
 async fn main() {
     dotenv().ok();
-    let token = env::var("DISCORD_BOT_TOKEN").expect("DISCORD_BOT_TOKEN must be set in .env");
+    let token = env::var("DISCORD_BOT_TOKEN").expect("DISCORD_BOT_TOKEN err in .env");
+    let spoty_cred = Credentials::new(
+        env::var("SPOTIFY_ID")
+            .expect("SPOTIFY_ID err in .env")
+            .as_str(),
+        env::var("SPOTIFY_TOKEN")
+            .expect("SPOTIFY_TOKE err in .env")
+            .as_str(),
+    );
+    let spotify_client = ClientCredsSpotify::new(spoty_cred);
+    spotify_client.request_token().await.unwrap();
 
     let intents = serenity::GatewayIntents::non_privileged();
 
@@ -140,6 +153,7 @@ async fn main() {
                     soundboard_data: soundboard::get_soundboard_data(AUDIO_PATH)
                         .expect("Failed to load soundboard data"),
                     tracks: Arc::new(Mutex::new(HashMap::new())),
+                    spotify_client,
                 })
             })
         })
