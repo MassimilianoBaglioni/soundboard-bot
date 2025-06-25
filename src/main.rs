@@ -109,7 +109,7 @@ async fn play(
 ) -> Result<(), Error> {
     ctx.defer_ephemeral().await?;
 
-    general::play_song_yt(
+    general::play_songs(
         &ctx.serenity_context(),
         title,
         ctx.guild_id().unwrap(),

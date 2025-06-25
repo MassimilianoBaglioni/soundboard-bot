@@ -12,8 +12,8 @@ use serenity::async_trait;
 use serenity::builder::GetMessages;
 
 use songbird::input::{Compose, File, YoutubeDl};
-use songbird::tracks::{self, TrackQueue};
-use songbird::{Event, TrackEvent};
+use songbird::tracks::TrackQueue;
+use songbird::{Call, Event, TrackEvent};
 use songbird::{EventContext, EventHandler as VoiceEventHandler};
 
 use tokio::time;
@@ -25,7 +25,7 @@ use serde_json::Value;
 use std::process::Command;
 use std::process::Stdio;
 
-use rspotify::model::{AlbumId, PlayableItem, PlaylistId};
+use rspotify::model::{AlbumId, PlayableItem, PlaylistId, TrackId};
 
 const PLAYLIST_LIMIT: Option<usize> = Some(200);
 
@@ -189,7 +189,7 @@ pub async fn stop_reproduction(ctx: &Context, guild_id: &GuildId, data: &Data) {
     }
 }
 
-pub async fn play_song_yt(
+pub async fn play_songs(
     ctx: &Context,
     url: String,
     guild_id: GuildId,
@@ -203,33 +203,7 @@ pub async fn play_song_yt(
         .entry(guild_id)
         .or_insert(TrackQueue::new());
 
-    let do_search = !url.starts_with("http");
-
-    let multiple_songs = if url.contains("list=") {
-        Some(MultipleSongs::YtPlaylist(
-            get_urls_playlist(url.clone(), PLAYLIST_LIMIT, &data.spotify_client).await,
-        ))
-    } else if let Some(spoty_id) = get_spoty_playlist_id(&url) {
-        Some(MultipleSongs::SpotiPlaylist(
-            get_urls_playlist(spoty_id.to_string(), PLAYLIST_LIMIT, &data.spotify_client).await,
-        ))
-    } else if let Some(album_id) = get_spoty_album_id(&url) {
-        println!("Spoty album: {:?}", album_id);
-        Some(MultipleSongs::SpotiAlbum(
-            (get_urls_album(album_id.to_string(), &data.spotify_client)).await,
-        ))
-    } else {
-        None
-    };
-
     join_channel(ctx, &guild_id, author_id, data).await;
-
-    let http_client = {
-        let data = ctx.data.read().await;
-        data.get::<HttpKey>()
-            .cloned()
-            .expect("Guaranteed to exist in the typemap.")
-    };
 
     let manager = songbird::get(ctx)
         .await
@@ -238,110 +212,142 @@ pub async fn play_song_yt(
 
     if let Some(handler_lock) = manager.get(guild_id) {
         let mut handler = handler_lock.lock().await;
-
-        match multiple_songs {
-            Some(playlist) => {
-                // Extract tracks and determine the playlist type once
-                let (tracks, is_youtube) = match playlist {
-                    MultipleSongs::YtPlaylist(tracks) => (tracks, true),
-                    MultipleSongs::SpotiAlbum(tracks) | MultipleSongs::SpotiPlaylist(tracks) => {
-                        (tracks, false)
-                    }
-                };
-
-                println!("Playlist handling");
-                let formatted_message = format!("**Enqueuing:** [{}] songs.", tracks.len());
-                if let Err(err) = msg_channel_id.say(&ctx.http, formatted_message).await {
-                    eprintln!("Failed to send message: {}", err);
-                }
-
-                for i in tracks {
-                    println!("Processing: {}", i);
-
-                    // Use the boolean flag instead of matching again
-                    let mut src = if is_youtube {
-                        YoutubeDl::new(http_client.clone(), i)
-                    } else {
-                        YoutubeDl::new_search(http_client.clone(), i)
-                    };
-
-                    let metadata = src.aux_metadata().await;
-                    if let Ok(aux_metadata) = metadata {
-                        let title = aux_metadata.title.as_deref().unwrap_or("Unknown Title");
-                        let video_url = aux_metadata
-                            .source_url
-                            .as_deref()
-                            .unwrap_or("URL not available");
-                        let guard = data.tracks.lock().await;
-                        if let Some(queue) = guard.get(&guild_id) {
-                            let track_handler =
-                                queue.add_source(src.clone().into(), &mut handler).await;
-                            let send_http = ctx.http.clone();
-                            let _result = track_handler.add_event(
-                                // Fixed: was `let * = track`
-                                Event::Track(TrackEvent::Play),
-                                SongStartNotifier {
-                                    chan_id: msg_channel_id,
-                                    http: send_http,
-                                    title: title.to_string(),
-                                    video_url: video_url.to_string(),
-                                },
-                            );
-                        }
-                    } else {
-                        println!("Failed to fetch aux metadata: {:?}", metadata.unwrap_err());
-                    }
-                }
-            }
-            None => {
-                let mut src = if do_search {
-                    YoutubeDl::new_search(http_client, url)
-                } else {
-                    YoutubeDl::new(http_client, url)
-                };
-
-                let metadata = src.aux_metadata().await;
-
-                if let Ok(aux_metadata) = metadata {
-                    let title = aux_metadata.title.as_deref().unwrap_or("Unknown Title");
-                    let video_url = aux_metadata
-                        .source_url
-                        .as_deref()
-                        .unwrap_or("URL not available");
-
-                    let guard = data.tracks.lock().await;
-                    if let Some(queue) = guard.get(&guild_id) {
-                        if !queue.is_empty() {
-                            let formatted_message =
-                                format!("**Added to the queue:** [{}]({})", title, video_url);
-                            if let Err(err) = msg_channel_id.say(&ctx.http, formatted_message).await
-                            {
-                                eprintln!("Failed to send message: {}", err);
-                            }
-                        }
-
-                        let track_handler =
-                            queue.add_source(src.clone().into(), &mut handler).await;
-
-                        let send_http = ctx.http.clone();
-
-                        let _ = track_handler.add_event(
-                            Event::Track(TrackEvent::Play),
-                            SongStartNotifier {
-                                chan_id: msg_channel_id,
-                                http: send_http,
-                                title: title.to_string(),
-                                video_url: video_url.to_string(),
-                            },
-                        );
-                    }
-                } else {
-                    println!("Failed to fetch aux metadata: {:?}", metadata.unwrap_err());
-                }
-            }
-        }
+        handle_song_request(ctx, url, data, msg_channel_id, &guild_id, &mut handler).await;
     } else {
         println!("Not in a channel");
+    }
+}
+
+pub async fn handle_song_request(
+    ctx: &Context,
+    url: String,
+    data: &Data,
+    msg_channel_id: ChannelId,
+    guild_id: &GuildId,
+    handler: &mut tokio::sync::MutexGuard<'_, Call>,
+) {
+    let http_client = {
+        let data = ctx.data.read().await;
+        data.get::<HttpKey>()
+            .cloned()
+            .expect("Guaranteed to exist in the typemap.")
+    };
+
+    // Check if this is a playlist first
+    match get_multiple_songs(data, url.clone()).await {
+        Some(playlist) => {
+            // Handle playlist
+            let (tracks, _is_youtube) = match playlist {
+                MultipleSongs::YtPlaylist(tracks) => (tracks, true),
+                MultipleSongs::SpotiAlbum(tracks) | MultipleSongs::SpotiPlaylist(tracks) => {
+                    (tracks, false)
+                }
+            };
+
+            println!("Playlist handling");
+            send_message(
+                &msg_channel_id,
+                ctx,
+                format!("**Enqueuing:** [{}] songs.", tracks.len()),
+            )
+            .await;
+
+            // Process each track in the playlist
+            for track_url in tracks {
+                println!("Processing: {}", track_url);
+                process_single_track(
+                    ctx,
+                    track_url,
+                    data,
+                    msg_channel_id,
+                    guild_id,
+                    handler,
+                    &http_client,
+                    true,
+                    true,
+                )
+                .await;
+            }
+        }
+        None => {
+            // Handle single song
+            process_single_track(
+                ctx,
+                url.clone(),
+                data,
+                msg_channel_id,
+                guild_id,
+                handler,
+                &http_client,
+                !url.starts_with("http"),
+                false,
+            )
+            .await;
+        }
+    }
+}
+
+async fn process_single_track(
+    ctx: &Context,
+    url: String,
+    data: &Data,
+    msg_channel_id: ChannelId,
+    guild_id: &GuildId,
+    handler: &mut tokio::sync::MutexGuard<'_, Call>,
+    http_client: &reqwest::Client,
+    do_search: bool,
+    is_playlist: bool,
+) {
+    let mut searching = do_search;
+    let url = match get_spoty_track_id(&url) {
+        Some(track_id) => {
+            searching = true;
+            get_spoti_track_title(&track_id.to_string(), data).await
+        }
+        None => url,
+    };
+
+    let mut src = if searching {
+        YoutubeDl::new_search(http_client.clone(), url)
+    } else {
+        YoutubeDl::new(http_client.clone(), url)
+    };
+
+    let metadata = src.aux_metadata().await;
+
+    if let Ok(aux_metadata) = metadata {
+        let title = aux_metadata.title.as_deref().unwrap_or("Unknown Title");
+        let video_url = aux_metadata
+            .source_url
+            .as_deref()
+            .unwrap_or("URL not available");
+
+        let guard = data.tracks.lock().await;
+        if let Some(queue) = guard.get(&guild_id) {
+            if !is_playlist && !queue.is_empty() {
+                send_message(
+                    &msg_channel_id,
+                    ctx,
+                    format!("**Added to the queue:** [{}]({})", title, video_url),
+                )
+                .await;
+            }
+
+            let track_handler = queue.add_source(src.clone().into(), handler).await;
+            let send_http = ctx.http.clone();
+
+            let _ = track_handler.add_event(
+                Event::Track(TrackEvent::Play),
+                SongStartNotifier {
+                    chan_id: msg_channel_id,
+                    http: send_http,
+                    title: title.to_string(),
+                    video_url: video_url.to_string(),
+                },
+            );
+        }
+    } else {
+        println!("Failed to fetch aux metadata: {:?}", metadata.unwrap_err());
     }
 }
 
@@ -370,7 +376,7 @@ pub async fn resume_song(guild_id: &GuildId, data: &Data) {
     }
 }
 
-pub async fn get_urls_playlist(
+async fn get_urls_playlist(
     url: String,
     limit: Option<usize>,
     spotify_client: &ClientCredsSpotify,
@@ -442,13 +448,12 @@ pub async fn get_urls_playlist(
     }
 }
 
-pub async fn get_urls_album(
+async fn get_urls_album(
     passed_album_id: String,
     spotify_client: &ClientCredsSpotify,
 ) -> Vec<String> {
     match AlbumId::from_id(&passed_album_id) {
         Ok(album_id) => {
-            println!("Spotify album found: {:?}", album_id);
             let mut urls = Vec::new();
             let items = spotify_client.album(album_id, None);
 
@@ -471,4 +476,45 @@ fn get_spoty_playlist_id(url: &str) -> Option<&str> {
 
 fn get_spoty_album_id(url: &str) -> Option<&str> {
     url.split("/album/").nth(1)?.split('?').next()
+}
+
+fn get_spoty_track_id(url: &str) -> Option<&str> {
+    url.split("/track/").nth(1)?.split('?').next()
+}
+
+async fn get_spoti_track_title(track_id: &str, data: &Data) -> String {
+    let spoti_client = &data.spotify_client;
+    let parsed_id =
+        TrackId::from_id(track_id).expect("Could not convertid on single track spotify");
+
+    let track = spoti_client
+        .track(parsed_id, None)
+        .await
+        .expect("Error on get_spoti_track_title");
+
+    track.name
+}
+
+async fn get_multiple_songs(data: &Data, url: String) -> Option<MultipleSongs> {
+    if url.contains("list=") {
+        Some(MultipleSongs::YtPlaylist(
+            get_urls_playlist(url.clone(), PLAYLIST_LIMIT, &data.spotify_client).await,
+        ))
+    } else if let Some(spoty_id) = get_spoty_playlist_id(&url) {
+        Some(MultipleSongs::SpotiPlaylist(
+            get_urls_playlist(spoty_id.to_string(), PLAYLIST_LIMIT, &data.spotify_client).await,
+        ))
+    } else if let Some(album_id) = get_spoty_album_id(&url) {
+        Some(MultipleSongs::SpotiAlbum(
+            (get_urls_album(album_id.to_string(), &data.spotify_client)).await,
+        ))
+    } else {
+        None
+    }
+}
+
+async fn send_message(msg_channel_id: &ChannelId, ctx: &Context, formatted_message: String) {
+    if let Err(err) = msg_channel_id.say(&ctx.http, formatted_message).await {
+        eprintln!("Failed to send message: {}", err);
+    }
 }
