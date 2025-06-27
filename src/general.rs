@@ -33,6 +33,8 @@ use serde_json::{self, Value};
 
 use crate::{spotify, Data, HttpKey};
 
+use tokio_util::sync::CancellationToken;
+
 const PLAYLIST_LIMIT: Option<usize> = Some(200);
 
 enum MultipleSongs {
@@ -251,6 +253,15 @@ pub async fn handle_song_request(
             };
 
             println!("Playlist handling");
+
+            let token = CancellationToken::new();
+
+            {
+                // Add the cancellation token for the current Guild
+                let cancels = data.playlist_cancellation.lock();
+                cancels.await.insert(*guild_id, token.clone());
+            }
+
             send_message(
                 &msg_channel_id,
                 ctx,
@@ -260,6 +271,9 @@ pub async fn handle_song_request(
 
             // Process each track in the playlist
             for track_url in tracks {
+                if token.is_cancelled() {
+                    break;
+                }
                 println!("Processing: {}", track_url);
                 process_single_track(
                     ctx,
@@ -271,6 +285,7 @@ pub async fn handle_song_request(
                     &http_client,
                     true,
                     true,
+                    Some(&token),
                 )
                 .await;
             }
@@ -287,6 +302,7 @@ pub async fn handle_song_request(
                 &http_client,
                 !url.starts_with("http"),
                 false,
+                None,
             )
             .await;
         }
@@ -303,6 +319,7 @@ async fn process_single_track(
     http_client: &reqwest::Client,
     do_search: bool,
     is_playlist: bool,
+    token: Option<&CancellationToken>,
 ) {
     let mut searching = do_search;
     let url = match spotify::get_spoti_track_id(&url) {
@@ -329,6 +346,14 @@ async fn process_single_track(
             .unwrap_or("URL not available");
 
         let guard = data.tracks.lock().await;
+
+        if let Some(token) = token {
+            if token.is_cancelled() {
+                println!("Track addition cancelled.");
+                return;
+            }
+        }
+
         if let Some(queue) = guard.get(&guild_id) {
             if !is_playlist && !queue.is_empty() {
                 send_message(
@@ -360,6 +385,9 @@ async fn process_single_track(
 pub async fn clear(guild_id: &GuildId, data: &Data) {
     let guard = data.tracks.lock().await;
     if let Some(queue) = guard.get(&guild_id) {
+        if let Some(token) = data.playlist_cancellation.lock().await.remove(guild_id) {
+            token.cancel();
+        }
         queue.stop();
     }
 }

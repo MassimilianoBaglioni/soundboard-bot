@@ -11,6 +11,7 @@ use serenity::all::GuildId;
 use songbird::{tracks::TrackQueue, SerenityInit};
 use std::{collections::HashMap, env, sync::Arc, time::Instant};
 use tokio::sync::Mutex;
+use tokio_util::sync::CancellationToken;
 
 const AUDIO_PATH: &str = "./audio/";
 
@@ -19,6 +20,7 @@ struct Data {
     soundboard_data: Vec<(String, String, String)>,
     tracks: Arc<Mutex<HashMap<GuildId, TrackQueue>>>,
     spotify_client: ClientCredsSpotify,
+    playlist_cancellation: Mutex<HashMap<GuildId, CancellationToken>>,
 }
 
 struct HttpKey;
@@ -150,6 +152,7 @@ async fn main() {
                         .expect("Failed to load soundboard data"),
                     tracks: Arc::new(Mutex::new(HashMap::new())),
                     spotify_client,
+                    playlist_cancellation: Mutex::new(HashMap::new()),
                 })
             })
         })
