@@ -4,12 +4,13 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use futures::stream;
-use serenity::all::{ButtonStyle, ChannelId, Context, CreateInteractionResponse, CreateMessage, GuildId, UserId};
+use serenity::all::{
+    ButtonStyle, ChannelId, Context, CreateInteractionResponse, CreateMessage, GuildId, UserId,
+};
 use serenity::builder::CreateButton;
 use serenity::futures::StreamExt;
 
 use crate::{general, Data, AUDIO_PATH};
-
 
 pub fn get_soundboard_data(location: &str) -> Result<Vec<(String, String, String)>, io::Error> {
     let path = Path::new(location);

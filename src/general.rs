@@ -22,7 +22,7 @@ use serenity::{
 use songbird::{
     input::{Compose, File, YoutubeDl},
     tracks::TrackQueue,
-    Call, Event, EventContext, TrackEvent,
+    Event, EventContext, TrackEvent,
 };
 
 use songbird::EventHandler as VoiceEventHandler;
@@ -185,7 +185,9 @@ pub async fn stop_reproduction(ctx: &Context, guild_id: &GuildId, data: &Data) {
         .clone();
 
     let guard = data.tracks.lock().await;
-
+    if let Some(token) = data.playlist_cancellation.lock().await.remove(guild_id) {
+        token.cancel();
+    }
     if let Some(queue) = guard.get(guild_id) {
         queue.stop();
     }
@@ -218,9 +220,8 @@ pub async fn play_songs(
         .expect("Songbird Voice client placed in at initialization.")
         .clone();
 
-    if let Some(handler_lock) = manager.get(guild_id) {
-        let mut handler = handler_lock.lock().await;
-        handle_song_request(ctx, url, data, msg_channel_id, &guild_id, &mut handler).await;
+    if let Some(_handler_lock) = manager.get(guild_id) {
+        handle_song_request(ctx, url, data, msg_channel_id, &guild_id).await;
     } else {
         println!("Not in a channel");
     }
@@ -232,7 +233,6 @@ pub async fn handle_song_request(
     data: &Data,
     msg_channel_id: ChannelId,
     guild_id: &GuildId,
-    handler: &mut tokio::sync::MutexGuard<'_, Call>,
 ) {
     let http_client = {
         let data = ctx.data.read().await;
@@ -274,14 +274,12 @@ pub async fn handle_song_request(
                 if token.is_cancelled() {
                     break;
                 }
-                println!("Processing: {}", track_url);
                 process_single_track(
                     ctx,
                     track_url,
                     data,
                     msg_channel_id,
                     guild_id,
-                    handler,
                     &http_client,
                     true,
                     true,
@@ -298,7 +296,6 @@ pub async fn handle_song_request(
                 data,
                 msg_channel_id,
                 guild_id,
-                handler,
                 &http_client,
                 !url.starts_with("http"),
                 false,
@@ -315,7 +312,6 @@ async fn process_single_track(
     data: &Data,
     msg_channel_id: ChannelId,
     guild_id: &GuildId,
-    handler: &mut tokio::sync::MutexGuard<'_, Call>,
     http_client: &reqwest::Client,
     do_search: bool,
     is_playlist: bool,
@@ -363,19 +359,26 @@ async fn process_single_track(
                 )
                 .await;
             }
+            let manager = songbird::get(ctx)
+                .await
+                .expect("Songbird Voice client placed in at initialisation")
+                .clone();
 
-            let track_handler = queue.add_source(src.clone().into(), handler).await;
-            let send_http = ctx.http.clone();
+            if let Some(handler_lock) = manager.get(*guild_id) {
+                let mut handler = handler_lock.lock().await;
+                let track_handler = queue.add_source(src.clone().into(), &mut *handler).await;
+                let send_http = ctx.http.clone();
 
-            let _ = track_handler.add_event(
-                Event::Track(TrackEvent::Play),
-                SongStartNotifier {
-                    chan_id: msg_channel_id,
-                    http: send_http,
-                    title: title.to_string(),
-                    video_url: video_url.to_string(),
-                },
-            );
+                let _ = track_handler.add_event(
+                    Event::Track(TrackEvent::Play),
+                    SongStartNotifier {
+                        chan_id: msg_channel_id,
+                        http: send_http,
+                        title: title.to_string(),
+                        video_url: video_url.to_string(),
+                    },
+                );
+            }
         }
     } else {
         println!("Failed to fetch aux metadata: {:?}", metadata.unwrap_err());
@@ -470,7 +473,6 @@ async fn get_urls_playlist(
 
                 // Extract the 'url' field from the JSON object
                 if let Some(url) = video_info.get("url").and_then(|u| u.as_str()) {
-                    println!("{}", url);
                     result.push(url.to_string());
                 } else {
                     eprintln!("No URL found in video entry");
