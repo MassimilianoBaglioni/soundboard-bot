@@ -1,31 +1,37 @@
-use std::path::PathBuf;
-use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::{
+    path::PathBuf,
+    process::{Command, Stdio},
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
-use futures::future::join_all;
+use futures::{future::join_all, StreamExt};
 
-use futures::StreamExt;
-use rspotify::prelude::BaseClient;
-use rspotify::ClientCredsSpotify;
-use serenity::all::{ChannelId, Context, GuildId, Http, UserId};
-use serenity::async_trait;
-use serenity::builder::GetMessages;
+use rspotify::{
+    model::{PlayableItem, PlaylistId},
+    prelude::BaseClient,
+    ClientCredsSpotify,
+};
 
-use songbird::input::{Compose, File, YoutubeDl};
-use songbird::tracks::TrackQueue;
-use songbird::{Call, Event, TrackEvent};
-use songbird::{EventContext, EventHandler as VoiceEventHandler};
+use serenity::{
+    all::{ChannelId, Context, GuildId, Http, UserId},
+    async_trait,
+    builder::GetMessages,
+};
+
+use songbird::{
+    input::{Compose, File, YoutubeDl},
+    tracks::TrackQueue,
+    Call, Event, EventContext, TrackEvent,
+};
+
+use songbird::EventHandler as VoiceEventHandler;
 
 use tokio::time;
 
-use crate::{Data, HttpKey};
+use serde_json::{self, Value};
 
-use serde_json;
-use serde_json::Value;
-use std::process::Command;
-use std::process::Stdio;
-
-use rspotify::model::{AlbumId, PlayableItem, PlaylistId, TrackId};
+use crate::{spotify, Data, HttpKey};
 
 const PLAYLIST_LIMIT: Option<usize> = Some(200);
 
@@ -299,10 +305,10 @@ async fn process_single_track(
     is_playlist: bool,
 ) {
     let mut searching = do_search;
-    let url = match get_spoty_track_id(&url) {
+    let url = match spotify::get_spoti_track_id(&url) {
         Some(track_id) => {
             searching = true;
-            get_spoti_track_title(&track_id.to_string(), data).await
+            spotify::get_spoti_track_title(&track_id.to_string(), data).await
         }
         None => url,
     };
@@ -448,65 +454,18 @@ async fn get_urls_playlist(
     }
 }
 
-async fn get_urls_album(
-    passed_album_id: String,
-    spotify_client: &ClientCredsSpotify,
-) -> Vec<String> {
-    match AlbumId::from_id(&passed_album_id) {
-        Ok(album_id) => {
-            let mut urls = Vec::new();
-            let items = spotify_client.album(album_id, None);
-
-            for track in items.await.expect("msg").tracks.items {
-                urls.push(track.name + " " + &track.artists[0].name);
-            }
-
-            urls
-        }
-        Err(e) => {
-            println!("Error on parsing spotify album: {:?}", e);
-            Vec::new()
-        }
-    }
-}
-
-fn get_spoty_playlist_id(url: &str) -> Option<&str> {
-    url.split("/playlist/").nth(1)?.split('?').next()
-}
-
-fn get_spoty_album_id(url: &str) -> Option<&str> {
-    url.split("/album/").nth(1)?.split('?').next()
-}
-
-fn get_spoty_track_id(url: &str) -> Option<&str> {
-    url.split("/track/").nth(1)?.split('?').next()
-}
-
-async fn get_spoti_track_title(track_id: &str, data: &Data) -> String {
-    let spoti_client = &data.spotify_client;
-    let parsed_id =
-        TrackId::from_id(track_id).expect("Could not convertid on single track spotify");
-
-    let track = spoti_client
-        .track(parsed_id, None)
-        .await
-        .expect("Error on get_spoti_track_title");
-
-    track.name
-}
-
 async fn get_multiple_songs(data: &Data, url: String) -> Option<MultipleSongs> {
     if url.contains("list=") {
         Some(MultipleSongs::YtPlaylist(
             get_urls_playlist(url.clone(), PLAYLIST_LIMIT, &data.spotify_client).await,
         ))
-    } else if let Some(spoty_id) = get_spoty_playlist_id(&url) {
+    } else if let Some(spoty_id) = spotify::get_spoti_playlist_id(&url) {
         Some(MultipleSongs::SpotiPlaylist(
             get_urls_playlist(spoty_id.to_string(), PLAYLIST_LIMIT, &data.spotify_client).await,
         ))
-    } else if let Some(album_id) = get_spoty_album_id(&url) {
+    } else if let Some(album_id) = spotify::get_spoti_album_id(&url) {
         Some(MultipleSongs::SpotiAlbum(
-            (get_urls_album(album_id.to_string(), &data.spotify_client)).await,
+            (spotify::get_urls_album(album_id.to_string(), &data.spotify_client)).await,
         ))
     } else {
         None

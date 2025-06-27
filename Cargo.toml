@@ -21,4 +21,3 @@ features = ["builtin-queue"]
 [dependencies.symphonia]
 version = "0.5"
 features = ["aac", "mp3", "isomp4", "alac"]
-

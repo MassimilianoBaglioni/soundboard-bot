@@ -1,20 +1,16 @@
 mod general;
 mod soundboard;
+mod spotify;
+
+use dotenvy::dotenv;
 use poise::serenity_prelude as serenity;
 use poise::serenity_prelude::prelude::TypeMapKey;
 use reqwest::Client as HttpClient;
-use serenity::all::GuildId;
-use songbird::tracks::TrackQueue;
-use songbird::SerenityInit;
-use std::collections::HashMap;
-use std::sync::Arc;
-use std::time::Instant;
-use tokio::sync::Mutex;
-
 use rspotify::{ClientCredsSpotify, Credentials};
-
-use dotenvy::dotenv;
-use std::env;
+use serenity::all::GuildId;
+use songbird::{tracks::TrackQueue, SerenityInit};
+use std::{collections::HashMap, env, sync::Arc, time::Instant};
+use tokio::sync::Mutex;
 
 const AUDIO_PATH: &str = "./audio/";
 
