@@ -1,68 +1,89 @@
-
 # Discord Music & Soundboard Bot
 
-A Discord bot built in Rust that can play music from YouTube, control playback, and create a soundboard with custom audio files. This bot supports both playing music from direct YouTube links or by searching song titles. Additionally, users can create a soundboard by adding audio files to a specific folder and using buttons to play sounds.
+A Discord bot built in Rust that can play music from YouTube and Spotify links, control playback, and create a soundboard with custom audio files. The bot supports both direct YouTube links and searching song titles, as well as Spotify albums, playlists, and single tracks (by searching YouTube for the audio). Users can also create a soundboard by adding audio files to a specific folder and using interactive buttons to play sounds.
+
+---
 
 ## Features
 
 - **Music Playback:**
-  - Play music from YouTube using either a direct link or a song title.
+  - Play music from YouTube using a direct link, playlist, or by searching a song title.
+  - Play music from Spotify public playlists, albums, and single tracks (the bot searches YouTube for the corresponding audio; it does **not** play music directly from Spotify).
   - Commands for controlling playback:
-    - `!pause`: Pauses the music.
-    - `!resume`: Resumes the paused music.
-    - `!skip`: Skips the current song.
-    - `!enqueue <song>`: Adds a song to the queue.
-
+    - `/play <song or link>`: Play a song or playlist from YouTube or Spotify.
+    - `/pause`: Pauses the music.
+    - `/resume`: Resumes the paused music.
+    - `/skip`: Skips the current song.
+    - `/clear`: Clears the queue and stops playback.
+    - `/seek <seconds>`: Seek forward in the current track (backward seeking is not supported).
 - **Soundboard:**
   - Users can add MP3 files to the `audio` folder.
   - The bot generates buttons for each audio file, with button labels based on the file names.
-  - The `!soundboard` command sends a message with all the buttons. When clicked, the bot joins the user's voice channel and plays the corresponding sound.
-  - The bot will also delete its last 10 messages before sending the soundboard buttons.
+  - The `/soundboard` command sends a message with all the buttons. When clicked, the bot joins the user's voice channel and plays the corresponding sound.
+  - The bot will also delete its previous soundboard messages before sending new soundboard buttons.
+  - **Note:** Soundboard buttons must be refreshed between different executions of the bot, as Discord invalidates old buttons.
+  - The bot joins the same voice channel as the user who used the `/soundboard` command.
+
+---
 
 ## Requirements
 
-To run this bot, you will need:
-
 - **Rust** (for building and running the project)
 - **yt-dlp** (for downloading music from YouTube)
-- **A Discord bot token** (stored in a `.env` file)
+- **Python** (yt-dlp requires Python to be installed)
+- **A Discord bot token and Spotify API credentials** (stored in a `.env` file)
 
 ### 1. Install Rust
 
-If you don't have Rust installed on your machine, you can install it by following these steps:
+If you don't have Rust installed, follow the [official guide](https://www.rust-lang.org/tools/install):
 
-1. Download and install **Rust** using the [official guide](https://www.rust-lang.org/tools/install).
-2. Verify the installation by running the following command in your terminal:
+```bash
+rustc --version
+```
 
-   ```bash
-   rustc --version
-   ```
+### 2. Install Python
 
-### 2. Install yt-dlp
+yt-dlp requires Python (3.7+).  
+Install Python from [python.org](https://www.python.org/downloads/) or use your system package manager:
 
-yt-dlp is a powerful tool used to download videos and music from YouTube.
+- On **Ubuntu/Debian**:
+  ```bash
+  sudo apt install python3
+  ```
+- On **macOS** (with Homebrew):
+  ```bash
+  brew install python
+  ```
+- On **Windows**: Download and install from [python.org](https://www.python.org/downloads/).
 
-- On **Linux** (Ubuntu/Debian), you can install it via `apt`:
+Verify installation:
+```bash
+python3 --version
+```
+
+### 3. Install yt-dlp
+
+- On **Linux** (Ubuntu/Debian):
 
   ```bash
   sudo apt install yt-dlp
   ```
 
-- On **macOS**, use `brew`:
+- On **macOS**:
 
   ```bash
   brew install yt-dlp
   ```
 
-- On **Windows**, you can download the latest release from the [yt-dlp GitHub releases](https://github.com/yt-dlp/yt-dlp/releases).
+- On **Windows**: Download from the [yt-dlp GitHub releases](https://github.com/yt-dlp/yt-dlp/releases).
 
-Once yt-dlp is installed, verify it by running:
+Verify installation:
 
 ```bash
 yt-dlp --version
 ```
 
-### 3. Set Up the Project
+### 4. Set Up the Project
 
 1. Clone the repository:
 
@@ -71,61 +92,75 @@ yt-dlp --version
    cd yourbotname
    ```
 
-2. Create a `.env` file inside the `src` folder and add your Discord bot token like this:
+2. Create a `.env` file in the **root folder** with the following content:
 
-   ```bash
-   DISCORD_TOKEN=your_discord_bot_token
+   ```env
+   DISCORD_BOT_TOKEN = your_discord_bot_token
+   SPOTIFY_ID = your_spotify_client_id
+   SPOTIFY_TOKEN = your_spotify_client_secret
    ```
 
-   Replace `your_discord_bot_token` with the actual token for your bot.
+   Replace the values with your actual credentials.
 
-3. Install the necessary Rust dependencies:
+3. Build and run the bot:
 
    ```bash
    cargo build
-   ```
-
-4. Run the bot:
-
-   ```bash
    cargo run
    ```
 
-   The bot should now be running and available on your Discord server.
+---
 
 ## Usage
 
-### Music Commands
+### Music Commands (Slash Commands)
 
-- `!play <song title or YouTube link>`: Play a song from YouTube.
-- `!pause`: Pause the currently playing music.
-- `!resume`: Resume the paused music.
-- `!skip`: Skip the current song.
-- `!enqueue <song title or YouTube link>`: Add a song to the queue.
+- `/play <song title, YouTube link, or Spotify link>`: Play a song, playlist, or album.
+- `/pause`: Pause the currently playing music.
+- `/resume`: Resume the paused music.
+- `/skip`: Skip the current song.
+- `/clear`: Clear the queue and stop playback.
+- `/seek <seconds>`: Seek forward in the current track.
 
 ### Soundboard Command
 
-- `!soundboard`: Send a message with buttons corresponding to the audio files in the `audio` folder.
+- `/soundboard`: Send a message with buttons for each audio file in the `audio` folder.
   - Each button will play the associated sound when clicked.
   - The bot will join the voice channel of the user who clicked the button and play the sound.
+  - Old soundboard messages are deleted automatically.
 
 ### Adding Audio to the Soundboard
 
 1. Place your `.mp3` files inside the `audio` folder.
-2. When you use the `!soundboard` command, the bot will automatically create buttons for each audio file.
+2. Use the `/soundboard` command to generate buttons for each audio file.
 
-### Example:
+---
 
-```plaintext
-!soundboard
-```
+## Important Notes
 
-This will display buttons for all the `.mp3` files in the `audio` folder.
+- **Spotify support:** The bot does **not** play music directly from Spotify. Instead, it searches YouTube for the corresponding track, album, or playlist and plays the result.
+- **Soundboard buttons:** Must be refreshed between bot restarts (use `/soundboard` again after restarting).
+- **Slash commands:** All commands are available as Discord slash commands. Make sure your bot has the necessary permissions.
+- **Voice channel:** The bot will join the same voice channel as the user who invokes the `/soundboard` command.
+- **Old soundboard messages:** The bot will automatically delete its previous soundboard messages when `/soundboard` is used again.
 
-## Contributing
+---
 
-Feel free to fork this repository, submit issues, and contribute improvements! Make sure to follow the project’s licensing terms.
+## Troubleshooting
+
+- If the bot does not respond, ensure it has the correct permissions and that slash commands are registered.
+- If playback does not work for Spotify links, ensure your Spotify credentials are correct and the tracks are public.
+- If you encounter issues with soundboard buttons, refresh them by running the `/soundboard` command again.
+
+---
 
 ## License
 
-This project is licensed under the [GNU General Public License v3.0](LICENSE).
+MIT
+
+---
+
+## Credits
+
+- [Songbird](https://github.com/serenity-rs/songbird) for voice and audio playback.
+-
