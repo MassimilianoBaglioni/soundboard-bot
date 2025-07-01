@@ -306,6 +306,17 @@ pub async fn handle_song_request(
     }
 }
 
+pub async fn seek(guild_id: &GuildId, data: &Data, seconds: String) {
+    if let Some(track_handle) = data.tracks.lock().await.get(guild_id) {
+        let current_handle = track_handle.current().unwrap();
+        let seek_result = current_handle.seek(Duration::from_secs(
+            seconds.parse().expect("Could not parse number from string"),
+        ));
+        println!("seek_result {:?}", seek_result.result());
+        let _ = current_handle.play();
+    }
+}
+
 async fn process_single_track(
     ctx: &Context,
     url: String,

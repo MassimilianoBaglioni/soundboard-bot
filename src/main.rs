@@ -121,6 +121,17 @@ async fn play(
     Ok(())
 }
 
+#[poise::command(slash_command, prefix_command)]
+async fn seek(
+    ctx: Context<'_>,
+    #[description = "Use seconds to seek in the track."] seconds: String,
+) -> Result<(), Error> {
+    ctx.defer_ephemeral().await?;
+    general::seek(&ctx.guild_id().unwrap(), ctx.data(), seconds).await;
+    ctx.say("Done").await?;
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() {
     dotenv().ok();
@@ -140,7 +151,15 @@ async fn main() {
 
     let framework = poise::Framework::builder()
         .options(poise::FrameworkOptions {
-            commands: vec![play(), resume(), skip(), pause(), soundboard(), clear()],
+            commands: vec![
+                play(),
+                resume(),
+                skip(),
+                pause(),
+                soundboard(),
+                clear(),
+                seek(),
+            ],
             ..Default::default()
         })
         .setup(|ctx, _ready, framework| {
