@@ -163,4 +163,4 @@ MIT
 ## Credits
 
 - [Songbird](https://github.com/serenity-rs/songbird) for voice and audio playback.
--
+- [rspotify](https://github.com/ramsayleung/rspotify) for Spotify
