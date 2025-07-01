@@ -3,3 +3,4 @@ audio/*
 !audio/.gitkeep
 .env
 .DS_Store
+.env
