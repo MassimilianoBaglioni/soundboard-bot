@@ -120,18 +120,18 @@ yt-dlp --version
 - `/resume`: Resume the paused music.
 - `/skip`: Skip the current song.
 - `/clear`: Clear the queue and stop playback.
-- `/seek <seconds>`: Seek forward in the current track.
+- `/seek <seconds>`: Seek a point forward in the current track expressed in seconds. Seeking backwards will stop the bot from playing.
 
 ### Soundboard Command
 
 - `/soundboard`: Send a message with buttons for each audio file in the `audio` folder.
   - Each button will play the associated sound when clicked.
   - The bot will join the voice channel of the user who clicked the button and play the sound.
-  - Old soundboard messages are deleted automatically.
+  - Old soundboard messages are deleted automatically. If the bot goes offline and returns online, the last soundboard message will persist, but it won't be usable and the soundboard command should be used again. 
 
 ### Adding Audio to the Soundboard
 
-1. Place your `.mp3` files inside the `audio` folder.
+1. Place your `.mp3` files (all audio format accepted by Songbird are supported) inside the `audio` folder.
 2. Use the `/soundboard` command to generate buttons for each audio file.
 
 ---
