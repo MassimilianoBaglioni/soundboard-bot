@@ -9,7 +9,7 @@ use reqwest::Client as HttpClient;
 use rspotify::{ClientCredsSpotify, Credentials};
 use serenity::all::GuildId;
 use songbird::{tracks::TrackQueue, SerenityInit};
-use std::{collections::HashMap, env, sync::Arc, time::Instant};
+use std::{collections::HashMap, env, fs::File, io::Cursor, sync::Arc, time::Instant};
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
@@ -132,16 +132,86 @@ async fn list(
 #[poise::command(slash_command, prefix_command)]
 async fn seek(
     ctx: Context<'_>,
-    #[description = "Use seconds to seek in the track."] seconds: String,
+    #[description = "Seeks forward in the currently playing track by the specified number of seconds. Only forward seeking is supported the new position must be ahead of the current playback time."]
+    seconds: String,
 ) -> Result<(), Error> {
     ctx.defer_ephemeral().await?;
-    general::seek(&ctx.guild_id().unwrap(), ctx.data(), seconds).await;
+    general::seek(
+        &ctx.serenity_context(),
+        &ctx.guild_id().unwrap(),
+        &ctx.channel_id(),
+        ctx.data(),
+        seconds,
+    )
+    .await;
     ctx.say("Done").await?;
     Ok(())
 }
 
+async fn update_yt_dlp() {
+    let (yt_dlp_filename, url) = if cfg!(target_os = "windows") {
+        (
+            "yt-dlp.exe",
+            "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe",
+        )
+    } else {
+        (
+            "yt-dlp",
+            "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp",
+        )
+    };
+
+    let response = reqwest::get(url)
+        .await
+        .expect("Failed to download last yt-dlp executable file.");
+
+    let yt_dlp_bin_path = std::env::current_dir()
+        .expect("Failed retrieving current dir in update_yt_dlp")
+        .join(yt_dlp_filename);
+
+    println!("Downloading from: {:?}", url);
+
+    println!("To path: {:?}", yt_dlp_bin_path);
+
+    let mut dest = File::create(yt_dlp_bin_path.clone())
+        .expect("Failed to create the destination file for yt-dl;p executable");
+    let mut content = Cursor::new(
+        response
+            .bytes()
+            .await
+            .expect("Fecthing yt-dlp bytes download failed."),
+    );
+    std::io::copy(&mut content, &mut dest).expect("Failed to write in the dest file.");
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(&yt_dlp_bin_path)
+            .expect("Permissions get issue.")
+            .permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&yt_dlp_bin_path, perms).expect("Permissions set issue.");
+    }
+
+    let old_path = env::var("PATH").unwrap_or_default();
+
+    let path_sep = if cfg!(windows) { ";" } else { ":" };
+
+    let new_path = format!(
+        "{}{}{}",
+        std::env::current_dir().expect("").to_str().expect(""),
+        path_sep,
+        old_path
+    );
+    env::set_var("PATH", new_path);
+
+    println!("Done updating yt-dlp");
+}
+
 #[tokio::main]
 async fn main() {
+    update_yt_dlp().await;
+
     dotenv().ok();
     let token = env::var("DISCORD_BOT_TOKEN").expect("DISCORD_BOT_TOKEN err in .env");
     let spoty_cred = Credentials::new(

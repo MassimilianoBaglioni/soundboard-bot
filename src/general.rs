@@ -33,6 +33,7 @@ use serde_json::{self, Value};
 
 use crate::{spotify, Data, HttpKey};
 
+use humantime::format_duration;
 use tokio_util::sync::CancellationToken;
 
 const PLAYLIST_LIMIT: Option<usize> = Some(200);
@@ -306,13 +307,42 @@ pub async fn handle_song_request(
     }
 }
 
-pub async fn seek(guild_id: &GuildId, data: &Data, seconds: String) {
+pub async fn seek(
+    ctx: &Context,
+    guild_id: &GuildId,
+    msg_channel_id: &ChannelId,
+    data: &Data,
+    seconds: String,
+) {
     if let Some(track_handle) = data.tracks.lock().await.get(guild_id) {
         let current_handle = track_handle.current().unwrap();
-        let seek_result = current_handle.seek(Duration::from_secs(
-            seconds.parse().expect("Could not parse number from string"),
-        ));
-        println!("seek_result {:?}", seek_result.result());
+        let seconds_int = seconds.parse().expect("Could not parse number from string");
+
+        let seek_result = current_handle.seek(Duration::from_secs(seconds_int));
+
+        match seek_result.result() {
+            Ok(_) => {
+                send_message(
+                    msg_channel_id,
+                    ctx,
+                    format!(
+                        "Successfully skipped at: **{}**.",
+                        format_duration(Duration::from_secs(seconds_int))
+                    ),
+                )
+                .await
+            }
+            Err(e) => {
+                eprintln!("{}", e);
+                send_message(
+                    msg_channel_id,
+                    ctx,
+                    String::from("Seek failed. Only **forward seek** is supported."),
+                )
+                .await
+            }
+        }
+
         let _ = current_handle.play();
     }
 }
