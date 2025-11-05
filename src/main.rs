@@ -124,7 +124,8 @@ async fn play(
 #[poise::command(slash_command, prefix_command)]
 async fn seek(
     ctx: Context<'_>,
-    #[description = "Use seconds to seek in the track."] seconds: String,
+    #[description = "Seeks forward in the currently playing track by the specified number of seconds. Only forward seeking is supported the new position must be ahead of the current playback time."]
+    seconds: String,
 ) -> Result<(), Error> {
     ctx.defer_ephemeral().await?;
     general::seek(
