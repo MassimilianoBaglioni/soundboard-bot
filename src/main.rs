@@ -122,6 +122,14 @@ async fn play(
 }
 
 #[poise::command(slash_command, prefix_command)]
+async fn list(
+    ctx: Context<'_>,
+    #[description = "List all queued songs"] seconds: String,
+) -> Result<(), Error> {
+    Ok(())
+}
+
+#[poise::command(slash_command, prefix_command)]
 async fn seek(
     ctx: Context<'_>,
     #[description = "Use seconds to seek in the track."] seconds: String,

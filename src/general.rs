@@ -53,7 +53,7 @@ struct SongStartNotifier {
 #[async_trait]
 impl VoiceEventHandler for SongStartNotifier {
     async fn act(&self, ctx: &EventContext<'_>) -> Option<Event> {
-        if let EventContext::Track(_track_list) = ctx {
+        if let EventContext::Track(_) = ctx {
             let formatted_message =
                 format!("**Now playing:** [{}]({})", self.title, self.video_url);
             if let Err(err) = self.chan_id.say(&self.http, formatted_message).await {
