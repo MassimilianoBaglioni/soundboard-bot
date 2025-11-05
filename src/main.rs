@@ -127,7 +127,14 @@ async fn seek(
     #[description = "Use seconds to seek in the track."] seconds: String,
 ) -> Result<(), Error> {
     ctx.defer_ephemeral().await?;
-    general::seek(&ctx.guild_id().unwrap(), ctx.data(), seconds).await;
+    general::seek(
+        &ctx.serenity_context(),
+        &ctx.guild_id().unwrap(),
+        &ctx.channel_id(),
+        ctx.data(),
+        seconds,
+    )
+    .await;
     ctx.say("Done").await?;
     Ok(())
 }
