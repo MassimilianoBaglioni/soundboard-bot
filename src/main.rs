@@ -13,12 +13,14 @@ use std::{collections::HashMap, env, fs::File, io::Cursor, sync::Arc, time::Inst
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
+use crate::general::send_message;
+
 const AUDIO_PATH: &str = "./audio/";
 
 struct Data {
     last_interaction: Arc<Mutex<Instant>>,
     soundboard_data: Vec<(String, String, String)>,
-    tracks: Arc<Mutex<HashMap<GuildId, TrackQueue>>>,
+    tracks: Arc<Mutex<HashMap<GuildId, (TrackQueue, Vec<String>)>>>,
     spotify_client: ClientCredsSpotify,
     playlist_cancellation: Mutex<HashMap<GuildId, CancellationToken>>,
 }
@@ -121,19 +123,47 @@ async fn play(
     Ok(())
 }
 
+/// Lists all the queued songs.
 #[poise::command(slash_command, prefix_command)]
-async fn list(
-    ctx: Context<'_>,
-    #[description = "List all queued songs"] seconds: String,
-) -> Result<(), Error> {
+async fn list(ctx: Context<'_>) -> Result<(), Error> {
+    const MAX_MSG_LEN: usize = 2000;
+    ctx.defer_ephemeral().await?;
+
+    let hmap = ctx.data().tracks.lock().await;
+    let titles = &hmap.get(&ctx.guild_id().unwrap()).unwrap().1;
+
+    let mut messages = Vec::<String>::new();
+
+    let mut formatted_msg = String::from("");
+
+    for (index, title) in titles.iter().enumerate() {
+        let tmp_msg = if index == 0 {
+            format!("`{:>2}.`* __Now playing__:* **{}**\n", index, title)
+        } else {
+            format!("`{:>2}.` **{}**\n", index, title)
+        };
+
+        if formatted_msg.len() + tmp_msg.len() > MAX_MSG_LEN {
+            messages.push(formatted_msg.clone());
+            formatted_msg.clear();
+        }
+        formatted_msg.push_str(&tmp_msg);
+    }
+
+    messages.push(formatted_msg.clone());
+
+    for message in messages {
+        send_message(&ctx.channel_id(), &ctx.serenity_context(), message).await;
+    }
+
     Ok(())
 }
 
+/// Seeks FORWARD in the currently playing track by the specified number of seconds.
 #[poise::command(slash_command, prefix_command)]
 async fn seek(
     ctx: Context<'_>,
-    #[description = "Seeks forward in the currently playing track by the specified number of seconds. Only forward seeking is supported the new position must be ahead of the current playback time."]
-    seconds: String,
+    #[description = "Absolute position in seconds to seek to."] seconds: String,
 ) -> Result<(), Error> {
     ctx.defer_ephemeral().await?;
     general::seek(
@@ -237,6 +267,7 @@ async fn main() {
                 soundboard(),
                 clear(),
                 seek(),
+                list(),
             ],
             ..Default::default()
         })

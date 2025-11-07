@@ -1,11 +1,12 @@
 use std::{
+    collections::HashMap,
     path::PathBuf,
     process::{Command, Stdio},
     sync::Arc,
     time::{Duration, Instant},
 };
 
-use futures::{future::join_all, StreamExt};
+use futures::{future::join_all, lock::Mutex, StreamExt};
 
 use rspotify::{
     model::{PlayableItem, PlaylistId},
@@ -14,7 +15,7 @@ use rspotify::{
 };
 
 use serenity::{
-    all::{ChannelId, Context, GuildId, Http, UserId},
+    all::{ChannelId, Context, Guild, GuildId, Http, UserId},
     async_trait,
     builder::GetMessages,
 };
@@ -51,6 +52,11 @@ struct SongStartNotifier {
     video_url: String,
 }
 
+struct RemoveTitleNotifier {
+    guild_id: GuildId,
+    titles: Arc<tokio::sync::Mutex<HashMap<GuildId, (TrackQueue, Vec<String>)>>>,
+}
+
 #[async_trait]
 impl VoiceEventHandler for SongStartNotifier {
     async fn act(&self, ctx: &EventContext<'_>) -> Option<Event> {
@@ -62,6 +68,18 @@ impl VoiceEventHandler for SongStartNotifier {
             }
         }
 
+        None
+    }
+}
+
+#[async_trait]
+impl VoiceEventHandler for RemoveTitleNotifier {
+    async fn act(&self, ctx: &EventContext<'_>) -> Option<Event> {
+        if let EventContext::Track(_) = ctx {
+            let mut map = self.titles.lock().await;
+            let (_, titles) = map.get_mut(&self.guild_id).unwrap();
+            titles.remove(0);
+        }
         None
     }
 }
@@ -150,7 +168,7 @@ async fn start_inactivity_checker(ctx: &Context, guild_id: &GuildId, data: &Data
 
             let mut queued_cnt = 0;
 
-            if let Some(crt_queue) = guard.get(&c_guild_id) {
+            if let Some((crt_queue, _)) = guard.get(&c_guild_id) {
                 queued_cnt = crt_queue.len();
             };
 
@@ -189,7 +207,7 @@ pub async fn stop_reproduction(ctx: &Context, guild_id: &GuildId, data: &Data) {
     if let Some(token) = data.playlist_cancellation.lock().await.remove(guild_id) {
         token.cancel();
     }
-    if let Some(queue) = guard.get(guild_id) {
+    if let Some((queue, _)) = guard.get(guild_id) {
         queue.stop();
     }
 
@@ -212,7 +230,7 @@ pub async fn play_songs(
         .lock()
         .await
         .entry(guild_id)
-        .or_insert(TrackQueue::new());
+        .or_insert((TrackQueue::new(), Vec::<String>::new()));
 
     join_channel(ctx, &guild_id, author_id, data).await;
 
@@ -314,7 +332,7 @@ pub async fn seek(
     data: &Data,
     seconds: String,
 ) {
-    if let Some(track_handle) = data.tracks.lock().await.get(guild_id) {
+    if let Some((track_handle, _)) = data.tracks.lock().await.get(guild_id) {
         let current_handle = track_handle.current().unwrap();
         let seconds_int = seconds.parse().expect("Could not parse number from string");
 
@@ -382,7 +400,7 @@ async fn process_single_track(
             .as_deref()
             .unwrap_or("URL not available");
 
-        let guard = data.tracks.lock().await;
+        let mut guard = data.tracks.lock().await;
 
         if let Some(token) = token {
             if token.is_cancelled() {
@@ -391,7 +409,7 @@ async fn process_single_track(
             }
         }
 
-        if let Some(queue) = guard.get(&guild_id) {
+        if let Some((queue, titles)) = guard.get_mut(&guild_id) {
             if !is_playlist && !queue.is_empty() {
                 send_message(
                     &msg_channel_id,
@@ -400,6 +418,8 @@ async fn process_single_track(
                 )
                 .await;
             }
+            titles.push(title.to_string());
+
             let manager = songbird::get(ctx)
                 .await
                 .expect("Songbird Voice client placed in at initialisation")
@@ -419,6 +439,14 @@ async fn process_single_track(
                         video_url: video_url.to_string(),
                     },
                 );
+
+                let _ = track_handler.add_event(
+                    Event::Track(TrackEvent::End),
+                    RemoveTitleNotifier {
+                        guild_id: *guild_id,
+                        titles: data.tracks.clone(),
+                    },
+                );
             }
         }
     } else {
@@ -428,7 +456,7 @@ async fn process_single_track(
 
 pub async fn clear(guild_id: &GuildId, data: &Data) {
     let guard = data.tracks.lock().await;
-    if let Some(queue) = guard.get(&guild_id) {
+    if let Some((queue, _)) = guard.get(&guild_id) {
         if let Some(token) = data.playlist_cancellation.lock().await.remove(guild_id) {
             token.cancel();
         }
@@ -437,20 +465,20 @@ pub async fn clear(guild_id: &GuildId, data: &Data) {
 }
 
 pub async fn skip_song(guild_id: &GuildId, data: &Data) {
-    if let Some(track_handle) = data.tracks.lock().await.get(guild_id) {
-        let _ = track_handle.skip();
+    if let Some((queue, _)) = data.tracks.lock().await.get(guild_id) {
+        let _ = queue.skip();
     }
 }
 
 pub async fn pause_song(guild_id: &GuildId, data: &Data) {
-    if let Some(track_handle) = data.tracks.lock().await.get(guild_id) {
-        let _ = track_handle.pause();
+    if let Some((queue, _)) = data.tracks.lock().await.get(guild_id) {
+        let _ = queue.pause();
     }
 }
 
 pub async fn resume_song(guild_id: &GuildId, data: &Data) {
-    if let Some(track_handle) = data.tracks.lock().await.get(guild_id) {
-        let _ = track_handle.resume();
+    if let Some((queue, _)) = data.tracks.lock().await.get(guild_id) {
+        let _ = queue.resume();
     }
 }
 
@@ -543,7 +571,7 @@ async fn get_multiple_songs(data: &Data, url: String) -> Option<MultipleSongs> {
     }
 }
 
-async fn send_message(msg_channel_id: &ChannelId, ctx: &Context, formatted_message: String) {
+pub async fn send_message(msg_channel_id: &ChannelId, ctx: &Context, formatted_message: String) {
     if let Err(err) = msg_channel_id.say(&ctx.http, formatted_message).await {
         eprintln!("Failed to send message: {}", err);
     }
