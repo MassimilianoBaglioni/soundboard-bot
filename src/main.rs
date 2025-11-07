@@ -164,6 +164,35 @@ async fn list(ctx: Context<'_>) -> Result<(), Error> {
     Ok(())
 }
 
+/// Removes the track at the specified index from the queue.
+#[poise::command(slash_command, prefix_command)]
+async fn remove(
+    ctx: Context<'_>,
+    #[description = "Index of the track to remove from the queue."] index: usize,
+) -> Result<(), Error> {
+    let mut hmap = ctx.data().tracks.lock().await;
+
+    let (queue, titles) = match hmap.get_mut(&ctx.guild_id().unwrap()) {
+        Some(tuple) => tuple,
+        None => {
+            let _ = ctx.say("No songs queued.").await?;
+            return Ok(());
+        }
+    };
+
+    if index < titles.len() {
+        if let Some(_) = queue.dequeue(index) {
+            ctx.say(format!("Succesfully removed: {}", titles[index]))
+                .await?;
+            titles.remove(index);
+        }
+    } else {
+        ctx.say("Index out of range.").await?;
+    }
+
+    Ok(())
+}
+
 /// Seeks FORWARD in the currently playing track by the specified number of seconds.
 #[poise::command(slash_command, prefix_command)]
 async fn seek(
@@ -273,6 +302,7 @@ async fn main() {
                 clear(),
                 seek(),
                 list(),
+                remove(),
             ],
             ..Default::default()
         })
