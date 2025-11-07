@@ -13,8 +13,6 @@ use std::{collections::HashMap, env, fs::File, io::Cursor, sync::Arc, time::Inst
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
-use crate::general::send_message;
-
 const AUDIO_PATH: &str = "./audio/";
 
 struct Data {
@@ -127,10 +125,17 @@ async fn play(
 #[poise::command(slash_command, prefix_command)]
 async fn list(ctx: Context<'_>) -> Result<(), Error> {
     const MAX_MSG_LEN: usize = 2000;
-    ctx.defer_ephemeral().await?;
+    ctx.defer().await?;
 
     let hmap = ctx.data().tracks.lock().await;
-    let titles = &hmap.get(&ctx.guild_id().unwrap()).unwrap().1;
+
+    let titles = match &hmap.get(&ctx.guild_id().unwrap()) {
+        Some(tuple) => tuple.1.clone(),
+        None => {
+            let _ = ctx.say("No songs queued.").await?;
+            return Ok(());
+        }
+    };
 
     let mut messages = Vec::<String>::new();
 
@@ -138,9 +143,9 @@ async fn list(ctx: Context<'_>) -> Result<(), Error> {
 
     for (index, title) in titles.iter().enumerate() {
         let tmp_msg = if index == 0 {
-            format!("`{:>2}.`* __Now playing__:* **{}**\n", index, title)
+            format!("`{:>2}.`*__ Now playing__:* **{}**\n", index, title)
         } else {
-            format!("`{:>2}.` **{}**\n", index, title)
+            format!("`{:>2}.`**{}**\n", index, title)
         };
 
         if formatted_msg.len() + tmp_msg.len() > MAX_MSG_LEN {
@@ -153,7 +158,7 @@ async fn list(ctx: Context<'_>) -> Result<(), Error> {
     messages.push(formatted_msg.clone());
 
     for message in messages {
-        send_message(&ctx.channel_id(), &ctx.serenity_context(), message).await;
+        let _ = ctx.say(message).await?;
     }
 
     Ok(())
