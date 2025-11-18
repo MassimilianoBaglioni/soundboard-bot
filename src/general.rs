@@ -1,12 +1,13 @@
 use std::{
     collections::HashMap,
+    error::Error,
     path::PathBuf,
     process::{Command, Stdio},
     sync::Arc,
     time::{Duration, Instant},
 };
 
-use futures::{future::join_all, lock::Mutex, StreamExt};
+use futures::{future::join_all, StreamExt};
 
 use rspotify::{
     model::{PlayableItem, PlaylistId},
@@ -15,7 +16,7 @@ use rspotify::{
 };
 
 use serenity::{
-    all::{ChannelId, Context, Guild, GuildId, Http, UserId},
+    all::{ChannelId, Context, GuildId, Http, UserId},
     async_trait,
     builder::GetMessages,
 };
@@ -575,4 +576,31 @@ pub async fn send_message(msg_channel_id: &ChannelId, ctx: &Context, formatted_m
     if let Err(err) = msg_channel_id.say(&ctx.http, formatted_message).await {
         eprintln!("Failed to send message: {}", err);
     }
+}
+
+async fn yt_search(client: &reqwest::Client, query: &str) -> Result<Vec<String>, Box<dyn Error>> {
+    let search = format!(
+        "http://suggestqueries.google.com/complete/search?client=firefox&ds=yt&q={}",
+        query
+    );
+
+    let body = client.get(search).send().await?.text().await?;
+
+    let v: Value = serde_json::from_str(&body).unwrap();
+    Ok(v[1]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|s| s.as_str().map(|s| s.to_string()))
+        .collect())
+}
+
+pub async fn suggest_queries(
+    ctx: poise::Context<'_, Data, Box<dyn std::error::Error + Send + Sync>>,
+    partial: &str,
+) -> Vec<String> {
+    let data = ctx.data();
+    yt_search(&data.reqwest_client, partial)
+        .await
+        .expect("Error finding suggestions")
 }

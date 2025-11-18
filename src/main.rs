@@ -3,6 +3,7 @@ mod soundboard;
 mod spotify;
 
 use dotenvy::dotenv;
+use general::suggest_queries;
 use poise::serenity_prelude as serenity;
 use poise::serenity_prelude::prelude::TypeMapKey;
 use reqwest::Client as HttpClient;
@@ -21,6 +22,7 @@ struct Data {
     tracks: Arc<Mutex<HashMap<GuildId, (TrackQueue, Vec<String>)>>>,
     spotify_client: ClientCredsSpotify,
     playlist_cancellation: Mutex<HashMap<GuildId, CancellationToken>>,
+    reqwest_client: reqwest::Client,
 }
 
 struct HttpKey;
@@ -103,7 +105,9 @@ async fn resume(ctx: Context<'_>) -> Result<(), Error> {
 #[poise::command(slash_command, prefix_command)]
 async fn play(
     ctx: Context<'_>,
-    #[description = "Url or title"] title: String,
+    #[description = "Url or title"]
+    #[autocomplete = "suggest_queries"]
+    title: String,
 ) -> Result<(), Error> {
     ctx.defer_ephemeral().await?;
 
@@ -155,7 +159,11 @@ async fn list(ctx: Context<'_>) -> Result<(), Error> {
         formatted_msg.push_str(&tmp_msg);
     }
 
-    messages.push(formatted_msg.clone());
+    if !formatted_msg.is_empty() {
+        messages.push(formatted_msg.clone());
+    } else {
+        messages.push(String::from("*No songs in queue.*"));
+    }
 
     for message in messages {
         let _ = ctx.say(message).await?;
@@ -181,11 +189,15 @@ async fn remove(
     };
 
     if index < titles.len() {
-        if let Some(_) = queue.dequeue(index) {
-            ctx.say(format!("Succesfully removed: {}", titles[index]))
-                .await?;
+        if index == 0 {
+            let _ = queue.skip();
+        } else {
+            let _ = queue.dequeue(index - 1);
             titles.remove(index);
         }
+
+        ctx.say(format!("*Succesfully removed:* **{}**", titles[index]))
+            .await?;
     } else {
         ctx.say("Index out of range.").await?;
     }
@@ -316,6 +328,7 @@ async fn main() {
                     tracks: Arc::new(Mutex::new(HashMap::new())),
                     spotify_client,
                     playlist_cancellation: Mutex::new(HashMap::new()),
+                    reqwest_client: reqwest::Client::new(),
                 })
             })
         })
